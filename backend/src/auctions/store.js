@@ -1,297 +1,291 @@
-// Armazenamento dos leilões em memória (temporário: será trocado pelo PostgreSQL).
+// Leilões e lances no PostgreSQL, usando o schema de dados/leilao_db.sql.
 //
-// Ciclo de vida do leilão (RN01 do edital): 5 estados, 5 transições.
-//   SCHEDULED (agendado) --chega o início--> ACTIVE (em andamento)
-//   SCHEDULED --cancelado pelo dono--> CANCELED
-//   ACTIVE --termina com lances--> SOLD (vendido)
-//   ACTIVE --termina sem lances--> ENDED_NO_BIDS (encerrado sem lances)
-//   ACTIVE --cancelado sem lances--> CANCELED
-// Os três últimos são finais: não saem deles.
+// Divisão de responsabilidade:
+//   items     -> o bem anunciado (name, description, category, seller_id)
+//   auctions  -> a venda do item (preço, estado, janela de tempo, líder)
+//   bids      -> cada lance aceito
 //
-// Os códigos ficam em inglês de propósito: são exatamente os valores do ENUM
-// auction_status em dados/leilao_db.sql. Quando o banco entrar, não há tradução.
+// Regras puras (tabela de incremento, validações) ficam em regras.js.
+// Aqui só há SQL e a transação do lance.
 
-const leiloes = [];
-const lances = [];
-let proximoIdLeilao = 1;
-let proximoLanceId = 1;
+const crypto = require('node:crypto');
+const db = require('../db');
+const regras = require('./regras');
 
-const LIMITES = {
-  tituloMin: 3,
-  tituloMax: 80,
-  descricaoMax: 500,
-  duracaoMinSegundos: 10, // decisão da equipe: curto o bastante para a demo
-  duracaoMaxSegundos: 24 * 60 * 60,
-  antecedenciaMaxSegundos: 7 * 24 * 60 * 60,
-};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const ROTULOS = {
-  SCHEDULED: 'agendado',
-  ACTIVE: 'em andamento',
-  SOLD: 'vendido',
-  ENDED_NO_BIDS: 'encerrado sem lances',
-  CANCELED: 'cancelado',
-};
+const SELECT_LEILAO = `
+  SELECT a.id,
+         i.name                AS titulo,
+         i.description         AS descricao,
+         i.category            AS categoria,
+         a.starting_price,
+         a.current_price,
+         a.status::text        AS status,
+         a.bid_count,
+         a.starts_at,
+         a.ends_at,
+         i.seller_id           AS dono_id,
+         vendedor.display_name AS dono_nome,
+         a.leader_id,
+         lider.display_name    AS lider_nome,
+         a.winner_id,
+         vencedor.display_name AS vencedor_nome,
+         ultimo.criado_em      AS ultimo_lance_em
+  FROM auctions a
+  JOIN items i        ON i.id = a.item_id
+  JOIN users vendedor ON vendedor.id = i.seller_id
+  LEFT JOIN users lider    ON lider.id = a.leader_id
+  LEFT JOIN users vencedor ON vencedor.id = a.winner_id
+  -- Última data de lance por leilão, agregada de uma vez (um JOIN, não N subqueries)
+  LEFT JOIN (
+    SELECT auction_id, max(created_at) AS criado_em
+    FROM bids
+    GROUP BY auction_id
+  ) ultimo ON ultimo.auction_id = a.id
+`;
 
-// Tabela do RF14: o incremento depende do preço atual, e só dele.
-const FAIXAS = [
-  { ate: 99.99, incremento: 1 },
-  { ate: 499.99, incremento: 5 },
-  { ate: 999.99, incremento: 10 },
-  { ate: 4999.99, incremento: 50 },
-  { ate: 24999.99, incremento: 100 },
-  { ate: Infinity, incremento: 500 },
-];
+const ORDEM = `
+  ORDER BY CASE a.status
+             WHEN 'ACTIVE' THEN 0
+             WHEN 'SCHEDULED' THEN 1
+             WHEN 'SOLD' THEN 2
+             WHEN 'ENDED_NO_BIDS' THEN 3
+             ELSE 4
+           END,
+           a.ends_at ASC
+`;
 
-const reais = (valor) =>
-  valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const FINAIS = ['SOLD', 'ENDED_NO_BIDS', 'CANCELED'];
 
-function erro(status, mensagem, codigo) {
-  const e = new Error(mensagem);
-  e.status = status;
-  e.codigo = codigo;
-  return e;
-}
+function paraApi(linha) {
+  if (!linha) return null;
 
-const arredondar = (valor) => Math.round(valor * 100) / 100;
+  const precoInicial = Number(linha.starting_price);
+  const lanceAtual = linha.bid_count > 0 ? Number(linha.current_price) : null;
+  const base = lanceAtual ?? precoInicial;
+  const finalizado = FINAIS.includes(linha.status);
 
-function paraNumero(valor, campo) {
-  const numero =
-    typeof valor === 'number' ? valor : Number(String(valor ?? '').replace(',', '.'));
-  if (!Number.isFinite(numero)) {
-    throw erro(400, `${campo} precisa ser um número`, 'VALOR_INVALIDO');
-  }
-  return arredondar(numero);
-}
-
-function paraData(valor, campo) {
-  if (!valor) throw erro(400, `${campo} é obrigatório`, 'DATA_OBRIGATORIA');
-  const data = new Date(valor);
-  if (Number.isNaN(data.getTime())) {
-    throw erro(400, `${campo} inválido`, 'DATA_INVALIDA');
-  }
-  return data;
-}
-
-// ---------------------------------------------------------------- regra RF14
-function incrementoPara(precoAtual) {
-  return FAIXAS.find((faixa) => precoAtual <= faixa.ate).incremento;
-}
-
-// Valor mínimo do próximo lance. Primeiro lance pode ser igual ao preço inicial.
-function proximoMinimo(leilao) {
-  if (!leilao.maiorLance) return leilao.precoInicial;
-  return arredondar(leilao.maiorLance.valor + incrementoPara(leilao.maiorLance.valor));
-}
-
-// ---------------------------------------------------------------- criação
-function criar({ titulo, descricao, precoInicial, inicio, fim, dono }) {
-  if (typeof titulo !== 'string') {
-    throw erro(400, 'O título é obrigatório', 'TITULO_OBRIGATORIO');
-  }
-  const tituloLimpo = titulo.trim();
-  if (tituloLimpo.length < LIMITES.tituloMin || tituloLimpo.length > LIMITES.tituloMax) {
-    throw erro(
-      400,
-      `O título precisa ter entre ${LIMITES.tituloMin} e ${LIMITES.tituloMax} caracteres`,
-      'TITULO_INVALIDO'
-    );
-  }
-
-  const preco = paraNumero(precoInicial, 'O preço inicial');
-  if (preco <= 0) throw erro(400, 'O preço inicial precisa ser maior que zero', 'PRECO_INVALIDO');
-
-  const agora = new Date();
-  const comeco = paraData(inicio, 'O início');
-  const termino = paraData(fim, 'O término');
-
-  if (comeco.getTime() < agora.getTime() - 60000) {
-    throw erro(400, 'O início não pode estar no passado', 'INICIO_NO_PASSADO');
-  }
-  if (comeco.getTime() > agora.getTime() + LIMITES.antecedenciaMaxSegundos * 1000) {
-    throw erro(400, 'O início não pode ser mais de 7 dias à frente', 'INICIO_LONGE_DEMAIS');
-  }
-
-  const duracaoSegundos = (termino.getTime() - comeco.getTime()) / 1000;
-  if (duracaoSegundos < LIMITES.duracaoMinSegundos) {
-    throw erro(
-      400,
-      `A duração mínima é de ${LIMITES.duracaoMinSegundos} segundos`,
-      'DURACAO_CURTA'
-    );
-  }
-  if (duracaoSegundos > LIMITES.duracaoMaxSegundos) {
-    throw erro(400, 'A duração máxima é de 24 horas', 'DURACAO_LONGA');
-  }
-
-  const leilao = {
-    id: proximoIdLeilao++,
-    titulo: tituloLimpo,
-    descricao:
-      typeof descricao === 'string' ? descricao.trim().slice(0, LIMITES.descricaoMax) : '',
-    precoInicial: preco,
-    // Compra: o leilão nasce AGENDADO, mesmo que o início seja agora.
-    // O relógio do servidor promove para ACTIVE no instante do início.
-    startsAt: comeco,
-    endsAt: termino,
-    status: 'SCHEDULED',
-    donoId: dono.id,
-    donoNome: dono.nome,
-    maiorLance: null,
-    vencedor: null,
-    encerradoEm: null,
-    criadoEm: agora,
-  };
-  leiloes.push(leilao);
-  return leilao;
-}
-
-function buscar(id) {
-  const numero = Number(id);
-  const leilao = leiloes.find((l) => l.id === numero);
-  if (!leilao) throw erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
-  return leilao;
-}
-
-function paraApi(leilao) {
   return {
-    id: leilao.id,
-    titulo: leilao.titulo,
-    descricao: leilao.descricao,
-    precoInicial: leilao.precoInicial,
-    donoId: leilao.donoId,
-    donoNome: leilao.donoNome,
-    status: leilao.status,
-    statusRotulo: ROTULOS[leilao.status],
-    maiorLance: leilao.maiorLance,
-    // Preço atual e próximo mínimo são calculados, nunca digitados
-    lanceAtual: leilao.maiorLance ? leilao.maiorLance.valor : null,
-    incrementoAtual: incrementoPara(
-      leilao.maiorLance ? leilao.maiorLance.valor : leilao.precoInicial
-    ),
-    proximoMinimo: proximoMinimo(leilao),
-    startsAt: leilao.startsAt.toISOString(),
-    endsAt: leilao.endsAt.toISOString(),
-    encerradoEm: leilao.encerradoEm,
-    vencedor: leilao.vencedor,
+    id: linha.id,
+    titulo: linha.titulo,
+    descricao: linha.descricao,
+    categoria: linha.categoria,
+    precoInicial,
+    donoId: linha.dono_id,
+    donoNome: linha.dono_nome,
+    status: linha.status,
+    statusRotulo: regras.ROTULOS[linha.status] || linha.status,
+    maiorLance:
+      lanceAtual == null
+        ? null
+        : {
+            usuarioId: linha.leader_id,
+            usuarioNome: linha.lider_nome,
+            valor: lanceAtual,
+            criadoEm: linha.ultimo_lance_em
+              ? new Date(linha.ultimo_lance_em).toISOString()
+              : null,
+          },
+    lanceAtual,
+    incrementoAtual: regras.incrementoPara(base),
+    proximoMinimo: regras.proximoMinimo(precoInicial, lanceAtual),
+    startsAt: new Date(linha.starts_at).toISOString(),
+    endsAt: new Date(linha.ends_at).toISOString(),
+    encerradoEm: finalizado ? new Date(linha.ends_at).toISOString() : null,
+    vencedor:
+      linha.winner_id == null
+        ? null
+        : {
+            usuarioId: linha.winner_id,
+            usuarioNome: linha.vencedor_nome,
+            valor: Number(linha.current_price),
+          },
     agora: new Date().toISOString(),
   };
 }
 
-function listar() {
-  return leiloes
-    .map(paraApi)
-    .sort((a, b) => {
-      const ordem = { ACTIVE: 0, SCHEDULED: 1, SOLD: 2, ENDED_NO_BIDS: 3, CANCELED: 4 };
-      if (ordem[a.status] !== ordem[b.status]) return ordem[a.status] - ordem[b.status];
-      return a.endsAt.localeCompare(b.endsAt);
-    });
+async function listar() {
+  const { rows } = await db.consultar(`${SELECT_LEILAO} ${ORDEM}`);
+  return rows.map(paraApi);
 }
 
-function historico(leilaoId) {
-  return lances
-    .filter((l) => l.leilaoId === Number(leilaoId))
-    .sort((a, b) => b.id - a.id)
-    .map((l) => ({
-      id: l.id,
-      usuarioNome: l.usuarioNome,
-      valor: l.valor,
-      criadoEm: l.criadoEm.toISOString(),
-    }));
+async function buscar(id) {
+  if (typeof id !== 'string' || !UUID.test(id)) {
+    throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+  }
+  const { rows } = await db.consultar(`${SELECT_LEILAO} WHERE a.id = $1`, [id]);
+  if (!rows[0]) throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+  return paraApi(rows[0]);
 }
 
-// ---------------------------------------------------------------- lance
-function darLance({ leilaoId, usuario, valor }) {
-  const leilao = buscar(leilaoId);
-  const agora = new Date();
+async function criar({ titulo, descricao, categoria, precoInicial, inicio, fim, dono }) {
+  const dados = regras.validarCriacao({ titulo, descricao, categoria, precoInicial, inicio, fim });
 
-  // RF10: todas as condições validadas no momento em que o lance é processado.
-  // Sem nenhum "await" entre validar e gravar: em Node isso é atômico.
-  // Com PostgreSQL, a mesma garantia vem de BEGIN + SELECT ... FOR UPDATE.
-  if (leilao.status === 'SCHEDULED') {
-    throw erro(409, 'O leilão ainda não começou', 'LEILAO_AGENDADO');
-  }
-  if (leilao.status !== 'ACTIVE' || agora >= leilao.endsAt) {
-    throw erro(409, 'Este leilão já foi encerrado', 'LEILAO_ENCERRADO');
-  }
-  if (leilao.donoId === usuario.id) {
-    throw erro(403, 'Você não pode dar lance no seu próprio leilão', 'DONO_DO_LEILAO');
-  }
-
-  const valorLance = paraNumero(valor, 'O lance');
-  if (valorLance <= 0) {
-    throw erro(400, 'O lance precisa ser maior que zero', 'LANCE_INVALIDO');
-  }
-
-  const minimo = proximoMinimo(leilao);
-  if (valorLance < minimo) {
-    throw erro(
-      400,
-      `O lance mínimo agora é ${reais(minimo)} (incremento de ${reais(incrementoPara(leilao.maiorLance ? leilao.maiorLance.valor : leilao.precoInicial))})`,
-      'LANCE_ABAIXO_DO_MINIMO'
+  const id = await db.transacao(async (cliente) => {
+    // O item é separado do leilão porque o mesmo item pode ser relistado depois
+    const item = await cliente.query(
+      `INSERT INTO items (seller_id, name, description, category)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id`,
+      [dono.id, dados.titulo, dados.descricao, dados.categoria]
     );
-  }
-  if (leilao.maiorLance && leilao.maiorLance.usuarioId === usuario.id) {
-    throw erro(409, 'Você já é o maior lance deste leilão', 'JA_E_O_MAIOR');
-  }
 
-  const lance = {
-    id: proximoLanceId++,
-    leilaoId: leilao.id,
-    usuarioId: usuario.id,
-    usuarioNome: usuario.nome,
-    valor: valorLance,
-    criadoEm: agora,
-  };
-  lances.push(lance);
-  leilao.maiorLance = {
-    usuarioId: usuario.id,
-    usuarioNome: usuario.nome,
-    valor: valorLance,
-    criadoEm: agora.toISOString(),
-  };
+    // Nasce SCHEDULED (padrão da coluna); preço atual e próximo mínimo
+    // começam iguais ao preço inicial.
+    const leilao = await cliente.query(
+      `INSERT INTO auctions
+         (item_id, starting_price, current_price, min_next_bid, starts_at, original_ends_at, ends_at)
+       VALUES ($1, $2, $2, $2, $3, $4, $4)
+       RETURNING id`,
+      [item.rows[0].id, dados.preco, dados.comeco, dados.termino]
+    );
 
-  return { lance, leilao };
+    return leilao.rows[0].id;
+  });
+
+  return buscar(id);
 }
 
-// ---------------------------------------------------------------- relógio
-// Chamado a cada segundo pelo server.js. Devolve o que mudou para o server
-// avisar as salas: quem abriu e quem fechou.
-function atualizarEstados() {
-  const agora = new Date();
-  const abertos = [];
-  const encerrados = [];
-
-  for (const leilao of leiloes) {
-    if (leilao.status === 'SCHEDULED' && agora >= leilao.startsAt) {
-      leilao.status = 'ACTIVE';
-      abertos.push(leilao);
-    }
-    if (leilao.status === 'ACTIVE' && agora >= leilao.endsAt) {
-      leilao.status = leilao.maiorLance ? 'SOLD' : 'ENDED_NO_BIDS';
-      leilao.encerradoEm = leilao.endsAt.toISOString();
-      leilao.vencedor = leilao.maiorLance
-        ? {
-            usuarioId: leilao.maiorLance.usuarioId,
-            usuarioNome: leilao.maiorLance.usuarioNome,
-            valor: leilao.maiorLance.valor,
-          }
-        : null;
-      encerrados.push(leilao);
-    }
+async function historico(leilaoId) {
+  if (typeof leilaoId !== 'string' || !UUID.test(leilaoId)) {
+    throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
   }
-
-  return { abertos, encerrados };
+  const { rows } = await db.consultar(
+    `SELECT b.id, b.amount, b.created_at, u.display_name AS nome
+     FROM bids b
+     JOIN users u ON u.id = b.bidder_id
+     WHERE b.auction_id = $1
+     ORDER BY b.created_at DESC, b.amount DESC`,
+    [leilaoId]
+  );
+  return rows.map((linha) => ({
+    id: linha.id,
+    usuarioNome: linha.nome,
+    valor: Number(linha.amount),
+    criadoEm: new Date(linha.created_at).toISOString(),
+  }));
 }
 
-module.exports = {
-  criar,
-  buscar,
-  listar,
-  historico,
-  darLance,
-  atualizarEstados,
-  paraApi,
-  proximoMinimo,
-  incrementoPara,
-};
+async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
+  if (typeof leilaoId !== 'string' || !UUID.test(leilaoId)) {
+    throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+  }
+
+  const resultado = await db.transacao(async (cliente) => {
+    // FOR UPDATE trava a linha do leilão até o COMMIT: dois lances simultâneos
+    // entram em fila, e o segundo já enxerga o valor gravado pelo primeiro.
+    // É a versão banco de dados da atomicidade que o array em memória dava.
+    const { rows } = await cliente.query(
+      `SELECT a.id,
+              a.status::text AS status,
+              a.bid_count,
+              a.current_price,
+              a.starting_price,
+              a.leader_id,
+              a.ends_at,
+              i.seller_id
+       FROM auctions a
+       JOIN items i ON i.id = a.item_id
+       WHERE a.id = $1
+       FOR UPDATE`,
+      [leilaoId]
+    );
+
+    const linha = rows[0];
+    if (!linha) throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+
+    const estado = {
+      status: linha.status,
+      precoInicial: Number(linha.starting_price),
+      lanceAtual: linha.bid_count > 0 ? Number(linha.current_price) : null,
+      donoId: linha.seller_id,
+      leaderId: linha.leader_id,
+      endsAt: new Date(linha.ends_at),
+    };
+
+    const validado = regras.validarLance({ leilao: estado, usuario, valor });
+    const proximo = regras.proximoMinimo(estado.precoInicial, validado.valorLance);
+
+    let inserido;
+    try {
+      inserido = await cliente.query(
+        `INSERT INTO bids (auction_id, bidder_id, amount, idempotency_key)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, created_at`,
+        [leilaoId, usuario.id, validado.valorLance, chaveIdempotencia || crypto.randomUUID()]
+      );
+    } catch (erro) {
+      if (erro.code === '23505') {
+        // Duas travas diferentes, com causas diferentes:
+        if (String(erro.constraint || '').includes('idempotency')) {
+          throw regras.erro(409, 'Este lance já foi registrado', 'LANCE_DUPLICADO');
+        }
+        throw regras.erro(
+          409,
+          `Outro participante acabou de dar lance de ${regras.reais(validado.valorLance)}. Tente o próximo mínimo.`,
+          'LANCE_CORRIDA'
+        );
+      }
+      throw erro;
+    }
+
+    await cliente.query(
+      `UPDATE auctions
+       SET current_price = $2, min_next_bid = $3, leader_id = $4, bid_count = bid_count + 1
+       WHERE id = $1`,
+      [leilaoId, validado.valorLance, proximo, usuario.id]
+    );
+
+    return { lance: inserido.rows[0], valorLance: validado.valorLance };
+  });
+
+  const leilaoAtualizado = await buscar(leilaoId);
+
+  return {
+    lance: {
+      id: resultado.lance.id,
+      valor: resultado.valorLance,
+      usuarioNome: usuario.nome,
+      criadoEm: new Date(resultado.lance.created_at).toISOString(),
+    },
+    leilao: leilaoAtualizado,
+  };
+}
+
+// Relógio do servidor (RF17/RF18): aplica no banco as transições de horário.
+// Roda a cada segundo e também no boot, recuperando o que passou enquanto o
+// processo estava fora do ar.
+async function atualizarEstados() {
+  const abertos = await db.consultar(
+    `UPDATE auctions
+     SET status = 'ACTIVE'
+     WHERE status = 'SCHEDULED' AND starts_at <= now()
+     RETURNING id`
+  );
+
+  // Dois UPDATEs em vez de um CASE com cast de ENUM: fica legível e funciona
+  // igual em qualquer Postgres. A ordem importa: quem tem lance vira SOLD.
+  const vendidos = await db.consultar(
+    `UPDATE auctions
+     SET status = 'SOLD', winner_id = leader_id
+     WHERE status = 'ACTIVE' AND ends_at <= now() AND bid_count > 0
+     RETURNING id, status::text AS status`
+  );
+
+  const semLance = await db.consultar(
+    `UPDATE auctions
+     SET status = 'ENDED_NO_BIDS', winner_id = NULL
+     WHERE status = 'ACTIVE' AND ends_at <= now() AND bid_count = 0
+     RETURNING id, status::text AS status`
+  );
+
+  const encerrados = [...vendidos.rows, ...semLance.rows];
+
+  return {
+    abertos: abertos.rows.map((linha) => linha.id),
+    encerrados: encerrados.map((linha) => ({ id: linha.id, status: linha.status })),
+  };
+}
+
+module.exports = { listar, buscar, criar, historico, darLance, atualizarEstados, paraApi };

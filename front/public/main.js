@@ -281,6 +281,7 @@ $('form-leilao').addEventListener('submit', async (evento) => {
       corpo: {
         titulo: $('leilao-titulo').value,
         descricao: $('leilao-descricao').value,
+        categoria: $('leilao-categoria').value,
         precoInicial: Number($('leilao-preco').value),
         // toISOString converte a hora local do navegador para UTC,
         // que é o que o servidor entende sem ambiguidade de fuso.
@@ -308,7 +309,7 @@ async function carregarDetalhe(id) {
 
     $('det-titulo').textContent = leilao.titulo;
     $('det-descricao').textContent = leilao.descricao || 'Sem descrição';
-    $('det-dono').textContent = `Publicado por ${leilao.donoNome}`;
+    $('det-dono').textContent = `Publicado por ${leilao.donoNome} · Categoria: ${leilao.categoria || 'Geral'}`;
     $('det-lance').textContent = formatarDinheiro(leilao.lanceAtual);
     $('det-minimo').textContent = formatarDinheiro(leilao.proximoMinimo);
     $('det-status').textContent = ROTULO_STATUS[leilao.status] || leilao.status;
@@ -488,10 +489,11 @@ async function rotear() {
     return;
   }
 
-  const casaLeilao = hash.match(/^#\/leilao\/(\d+)$/);
+  // Os ids agora são UUID (vêm do PostgreSQL), não números
+  const casaLeilao = hash.match(/^#\/leilao\/([0-9a-f-]{36})$/i);
   if (casaLeilao) {
     mostrarView('detalhe');
-    await carregarDetalhe(Number(casaLeilao[1]));
+    await carregarDetalhe(casaLeilao[1]);
     return;
   }
 

@@ -1,12 +1,11 @@
 # ATENÇÃO: o contexto de build é a RAIZ do repositório, não a pasta backend.
 # Está definido em docker-compose.yml (context: . / dockerfile: backend/Dockerfile),
-# porque a imagem precisa das duas pastas: backend/ e front/public.
+# porque a imagem precisa de três pastas: backend/, front/public e dados/.
 #
-# O layout dentro da imagem espelha o repositório:
-#   /app/backend/src/...  -> o código
-#   /app/front/public/... -> a tela
-# Isso é obrigatório porque app.js serve os arquivos estáticos a partir de
-# ../../front/public, relativo a /app/backend/src.
+# Layout dentro da imagem (espelha o repositório):
+#   /app/backend/src/...   -> o código
+#   /app/front/public/...  -> a tela
+#   /app/dados/*.sql       -> schema e dados de demonstração (npm run db:setup)
 
 FROM node:20-alpine
 
@@ -19,13 +18,16 @@ RUN npm install --omit=dev
 # Código (node_modules e .env locais ficam de fora pelo .dockerignore)
 COPY backend/ ./
 
-# O front servido pelo próprio back-end
+# A tela servida pelo próprio back-end
 COPY front/public /app/front/public
+
+# Schema e seed do banco, para o comando db:setup funcionar dentro do container
+COPY dados /app/dados
 
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
 
 # "npm start" roda "node src/server.js".
-# Não use "npm run dev" aqui: nodemon é de desenvolvimento e reinicia o processo sozinho.
+# Não use "npm run dev" aqui: nodemon é de desenvolvimento e reinicia o processo.
 CMD ["npm", "start"]

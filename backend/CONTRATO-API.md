@@ -18,13 +18,21 @@ Rotas marcadas com 🔒 exigem `Authorization: Bearer <token>`.
 | Método | Rota | Corpo | Resposta |
 |---|---|---|---|
 | GET | `/auctions` | — | `200 { leiloes: [...], agora }` |
-| POST | `/auctions` 🔒 | `{ titulo, descricao, precoInicial, inicio, fim }` | `201 { leilao }` |
+| POST | `/auctions` 🔒 | `{ titulo, descricao, categoria, precoInicial, inicio, fim }` | `201 { leilao }` |
 | GET | `/auctions/:id` | — | `200 { leilao, historico }` |
 | GET | `/auctions/:id/bids` | — | `200 { historico }` |
 | POST | `/auctions/:id/bids` 🔒 | `{ valor }` | `201 { lance, leilao }` |
 
 `inicio` e `fim` são datas ISO 8601 em UTC (`2026-11-14T21:00:00.000Z`). O front converte
 o `datetime-local` do formulário com `toISOString()`, porque o input não carrega fuso.
+
+**Ids são UUID** (gerados pelo PostgreSQL), sempre string. Não conte com números.
+
+O lance aceita o cabeçalho opcional `Idempotency-Key` (UUID): reenviar a mesma chave pelo
+mesmo usuário não cria um segundo lance (RF12).
+
+**Persistência:** usuários, leilões e lances ficam no PostgreSQL (`dados/leilao_db.sql`).
+Reiniciar o servidor não apaga nada; o estado das janelas de tempo é recalculado no boot.
 
 **Não existe campo de incremento.** Ele é derivado do preço atual (RF14), no servidor.
 
