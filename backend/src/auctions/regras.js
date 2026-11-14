@@ -16,6 +16,10 @@ const LIMITES = {
   fotoUrlMax: 500,
   // RF13: intervalo mínimo entre lances do MESMO usuário
   intervaloMinimoLanceMs: 500,
+  // RF15: lance nos últimos 2 minutos prorroga o fim por 2 minutos,
+  // com no máximo 30 minutos de prorrogação acumulada.
+  prorrogacaoJanelaSegundos: 120,
+  prorrogacaoAcumuladaMaxSegundos: 30 * 60,
 };
 
 const ROTULOS = {
@@ -198,6 +202,21 @@ function validarFotos(fotos) {
   return urls;
 }
 
+// RF15: um leilão não pode ser vencido por um lance de último segundo sem chance
+// de resposta. Se o lance chega nos 2 minutos finais, o término vira o momento do
+// lance + 2 minutos — nunca além de 30 minutos somados ao término original.
+// Devolve a nova data ou null quando não há prorrogação.
+function calcularProrrogacao({ agora, endsAt, originalEndsAt }) {
+  const faltamMs = endsAt.getTime() - agora.getTime();
+  if (faltamMs > LIMITES.prorrogacaoJanelaSegundos * 1000) return null;
+
+  const limite = originalEndsAt.getTime() + LIMITES.prorrogacaoAcumuladaMaxSegundos * 1000;
+  const proposto = agora.getTime() + LIMITES.prorrogacaoJanelaSegundos * 1000;
+  const novoFim = new Date(Math.min(proposto, limite));
+
+  return novoFim.getTime() > endsAt.getTime() ? novoFim : null;
+}
+
 // Dica do edital (RF09): identificar o líder sem expor o nome completo.
 function mascararNome(nome) {
   if (typeof nome !== 'string' || !nome.trim()) return '—';
@@ -219,6 +238,7 @@ module.exports = {
   paraData,
   validarCriacao,
   validarLance,
+  calcularProrrogacao,
   validarFotos,
   mascararNome,
 };

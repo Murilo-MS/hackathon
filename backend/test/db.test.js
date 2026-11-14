@@ -347,3 +347,33 @@ test('o SQL usa colunas que existem no schema real do projeto', () => {
     assert.ok(schema.includes(coluna), `o schema real não tem a coluna ${coluna}`);
   }
 });
+test('lance nos últimos 2 minutos prorroga o término (RF15)', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana', email: 'a@exemplo.com', senhaHash: 'h' });
+
+  const agora = Date.now();
+  const leilao = await criarLeilao(dona, { fim: iso(agora + 30000) });
+  await store.atualizarEstados();
+
+  const antes = new Date(leilao.endsAt).getTime();
+  const resultado = await store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 100 });
+  const depois = new Date(resultado.leilao.endsAt).getTime();
+
+  assert.ok(depois > antes, 'o término deveria ter sido prorrogado');
+  const faltam = depois - Date.now();
+  assert.ok(faltam > 100000 && faltam < 130000, `esperado ~2 min, veio ${faltam} ms`);
+});
+
+test('lance longe do término não prorroga (RF15)', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana', email: 'a@exemplo.com', senhaHash: 'h' });
+
+  const agora = Date.now();
+  const leilao = await criarLeilao(dona, { fim: iso(agora + 3600000) });
+  await store.atualizarEstados();
+
+  const resultado = await store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 100 });
+  assert.strictEqual(resultado.leilao.endsAt, leilao.endsAt);
+});

@@ -37,6 +37,9 @@ Reiniciar o servidor não apaga nada; o estado das janelas de tempo é recalcula
 
 **Não existe campo de incremento.** Ele é derivado do preço atual (RF14), no servidor.
 
+**`endsAt` pode mudar durante o leilão** (RF15): um lance nos 2 minutos finais prorroga o término
+em até 30 minutos acumulados. O novo valor chega no evento `new_bid` (`endsAt`).
+
 Objeto `leilao`:
 
 ```json

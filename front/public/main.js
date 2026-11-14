@@ -491,6 +491,11 @@ function conectarSocket() {
     if (dados.leilaoId !== leilaoAberto) return;
 
     if (dados.totalLances != null) $('det-total').textContent = String(dados.totalLances);
+    // RF15: o término pode ter sido prorrogado pelo lance
+    if (dados.endsAt) {
+      $('det-tempo').dataset.termina = dados.endsAt;
+      if (leilaoAbertoDados) leilaoAbertoDados.endsAt = dados.endsAt;
+    }
     $('det-lance').textContent = formatarDinheiro(dados.lanceAtual);
     $('det-minimo').textContent = formatarDinheiro(dados.proximoMinimo);
     $('lance-valor').min = String(dados.proximoMinimo);

@@ -242,6 +242,7 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
               a.starting_price,
               a.leader_id,
               a.ends_at,
+              a.original_ends_at,
               i.seller_id
        FROM auctions a
        JOIN items i ON i.id = a.item_id
@@ -260,6 +261,7 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
       donoId: linha.seller_id,
       leaderId: linha.leader_id,
       endsAt: new Date(linha.ends_at),
+      originalEndsAt: new Date(linha.original_ends_at),
     };
 
     const validado = regras.validarLance({ leilao: estado, usuario, valor });
@@ -306,11 +308,19 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
       throw erro;
     }
 
+    // RF15: lance nos 2 minutos finais empurra o término (máx. 30 min acumulados)
+    const novoFim = regras.calcularProrrogacao({
+      agora: new Date(),
+      endsAt: estado.endsAt,
+      originalEndsAt: estado.originalEndsAt,
+    });
+
     await cliente.query(
       `UPDATE auctions
-       SET current_price = $2, min_next_bid = $3, leader_id = $4, bid_count = bid_count + 1
+       SET current_price = $2, min_next_bid = $3, leader_id = $4,
+           bid_count = bid_count + 1, ends_at = $5
        WHERE id = $1`,
-      [leilaoId, validado.valorLance, proximo, usuario.id]
+      [leilaoId, validado.valorLance, proximo, usuario.id, novoFim ?? estado.endsAt]
     );
 
     return { lance: inserido.rows[0], valorLance: validado.valorLance };
