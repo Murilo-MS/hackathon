@@ -1,4 +1,3 @@
--- 01_schema.sql (versão enxuta) - PostgreSQL 14+
 
 CREATE EXTENSION IF NOT EXISTS citext;
 
