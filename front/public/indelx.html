@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leilão Online</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Leilão Online</h1>
+    <p id="mensagem" role="alert"></p>
+
+    <section id="area-visitante">
+      <form id="form-login">
+        <h2>Entrar</h2>
+        <label>E-mail <input id="login-email" type="email" required></label>
+        <label>Senha <input id="login-senha" type="password" required></label>
+        <button type="submit">Entrar</button>
+      </form>
+
+      <form id="form-cadastro">
+        <h2>Criar conta</h2>
+        <label>Nome de exibição <input id="cad-nome" type="text" required></label>
+        <label>E-mail <input id="cad-email" type="email" required></label>
+        <label>Senha (mín. 8 caracteres) <input id="cad-senha" type="password" minlength="8" required></label>
+        <button type="submit">Cadastrar</button>
+      </form>
+    </section>
+
+    <section id="area-logado" hidden>
+      <p>Olá, <strong id="nome-usuario"></strong>!</p>
+      <button id="btn-sair" type="button">Sair</button>
+    </section>
+  </main>
+  <script src="main.js"></script>
+</body>
+</html>
