@@ -1,11 +1,13 @@
 // Verificação ponta a ponta: agendamento, transições de estado, tabela de
 // incremento do RF14, regras de lance e tempo real.
-// Uso: BASE_URL=http://127.0.0.1:8080 node scripts/verificar-api.js
+// Uso: node scripts/verificar-api.js
+//      BASE_URL=http://200.18.99.113:8080 node scripts/verificar-api.js  (testar o publicado)
+// Padrão é localhost:8080 para não criar contas de teste no servidor da demonstração.
 
 const assert = require('node:assert');
 const { io } = require('socket.io-client');
 
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:8093';
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:8080';
 let ok = 0;
 let falhas = 0;
 
