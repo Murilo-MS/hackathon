@@ -1,8 +1,8 @@
 const express = require('express');
-const { hashSenha, conferirSenha } = require('../auth/password');
-const { gerarToken } = require('../auth/token');
-const { exigirLogin } = require('../auth/middleware');
-const usuarios = require('../users/userStore');
+const { hashSenha, conferirSenha } = require('../password');
+const { gerarToken } = require('../token');
+const { exigirLogin } = require('../middleware');
+const usuarios = require('../../users/userStore');
 
 const router = express.Router();
 const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
