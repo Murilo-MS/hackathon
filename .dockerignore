@@ -1,0 +1,8 @@
+# Não envia para a imagem o que não deve ir
+.git
+.gitignore
+**/node_modules
+**/.env
+.env
+*.md
+captura-*.png

@@ -1,20 +1,31 @@
-# Usa uma imagem leve do Node
+# ATENÇÃO: o contexto de build é a RAIZ do repositório, não a pasta backend.
+# Está definido em docker-compose.yml (context: . / dockerfile: backend/Dockerfile),
+# porque a imagem precisa das duas pastas: backend/ e front/public.
+#
+# O layout dentro da imagem espelha o repositório:
+#   /app/backend/src/...  -> o código
+#   /app/front/public/... -> a tela
+# Isso é obrigatório porque app.js serve os arquivos estáticos a partir de
+# ../../front/public, relativo a /app/backend/src.
+
 FROM node:20-alpine
 
-# Define o diretório de trabalho dentro do container
-WORKDIR /app
+WORKDIR /app/backend
 
-# Copia os arquivos de dependência
-COPY package*.json ./
+# Dependências primeiro: essa camada só é refeita quando package.json muda
+COPY backend/package*.json ./
+RUN npm install --omit=dev
 
-# Instala as dependências
-RUN npm install
+# Código (node_modules e .env locais ficam de fora pelo .dockerignore)
+COPY backend/ ./
 
-# Copia o resto do código do projeto
-COPY . .
+# O front servido pelo próprio back-end
+COPY front/public /app/front/public
 
-# Expõe a porta (ajuste se o backend de vocês usar outra, ex: 3000)
-EXPOSE 3000
+ENV NODE_ENV=production
+ENV PORT=8080
+EXPOSE 8080
 
-# Comando para iniciar o backend (ajuste se no package.json o script for "start" em vez de "dev")
-CMD ["npm", "run", "dev"]
+# "npm start" roda "node src/server.js".
+# Não use "npm run dev" aqui: nodemon é de desenvolvimento e reinicia o processo sozinho.
+CMD ["npm", "start"]
