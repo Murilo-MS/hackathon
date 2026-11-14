@@ -193,3 +193,11 @@ form h3 { margin: 0 0 12px; font-size: 16px; }
 .botao.perigo { background: #b91c1c; }
 .botao.perigo:hover { background: #991b1b; }
 #btn-cancelar-leilao { margin-top: 12px; }
+/* ---------- campos de foto ---------- */
+.fotos { border: 1px solid #cbd2d9; border-radius: 8px; padding: 12px; margin: 0; }
+.fotos legend { font-size: 13px; font-weight: 600; color: #3e4c59; padding: 0 6px; }
+.fotos-campos { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.linha-foto { display: flex; gap: 8px; align-items: center; }
+.linha-foto input { flex: 1; }
+.linha-foto .botao { padding: 7px 10px; font-size: 13px; }
+.acoes-detalhe { margin-top: 12px; }

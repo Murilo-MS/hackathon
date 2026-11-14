@@ -108,9 +108,10 @@ PostgreSQL: users, items, item_photos, auctions, bids
    dentro de cada grupo, pelo término mais próximo.
 10. **Ids UUID.** O banco gera UUID; o front trata o id como texto. Evita colisão quando mais de
     uma instância do back estiver rodando.
-11. **Prorrogação (RF15).** Lance feito nos últimos 2 minutos joga o término para 2 minutos depois
-    do lance, com teto de 30 minutos somados ao término original. O novo horário vai no evento
-    `new_bid`, então o cronômetro de todos se ajusta sem recarregar.
+11. **Prorrogação (RF15).** Duas formas, com o mesmo teto de 30 minutos sobre o término original:
+    automática (lance nos 2 minutos finais joga o fim para 2 minutos depois do lance) e manual
+    (o comitente clica em "Prorrogar +5 min"). O novo horário vai no evento `new_bid`/`auction_extended`,
+    então o cronômetro de todos se ajusta sem recarregar.
 
 ## O que ficou fora (transparência para o pitch)
 

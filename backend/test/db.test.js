@@ -377,3 +377,32 @@ test('lance longe do término não prorroga (RF15)', async () => {
   const resultado = await store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 100 });
   assert.strictEqual(resultado.leilao.endsAt, leilao.endsAt);
 });
+test('prorrogação manual pelo comitente (RF15)', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana', email: 'a@exemplo.com', senhaHash: 'h' });
+
+  const agora = Date.now();
+  const leilao = await criarLeilao(dona, { fim: iso(agora + 600000) });
+
+  await assert.rejects(
+    () => store.prorrogar({ leilaoId: leilao.id, usuario: ana, minutos: 5 }),
+    /quem publicou/
+  );
+  await assert.rejects(
+    () => store.prorrogar({ leilaoId: leilao.id, usuario: dona, minutos: 0 }),
+    /1 a 30/
+  );
+
+  const antes = new Date(leilao.endsAt).getTime();
+  const prorrogado = await store.prorrogar({ leilaoId: leilao.id, usuario: dona, minutos: 5 });
+  const depois = new Date(prorrogado.endsAt).getTime();
+  assert.strictEqual(depois - antes, 5 * 60 * 1000);
+
+  // teto de 30 minutos: já foram 5, mais 30 chega ao limite
+  await store.prorrogar({ leilaoId: leilao.id, usuario: dona, minutos: 30 });
+  await assert.rejects(
+    () => store.prorrogar({ leilaoId: leilao.id, usuario: dona, minutos: 5 }),
+    /limite de prorrogação/
+  );
+});

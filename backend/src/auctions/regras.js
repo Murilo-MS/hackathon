@@ -20,6 +20,8 @@ const LIMITES = {
   // com no máximo 30 minutos de prorrogação acumulada.
   prorrogacaoJanelaSegundos: 120,
   prorrogacaoAcumuladaMaxSegundos: 30 * 60,
+  prorrogacaoManualMaxMinutos: 30,
+  prorrogacaoManualPadraoMinutos: 5,
 };
 
 const ROTULOS = {
@@ -217,6 +219,23 @@ function calcularProrrogacao({ agora, endsAt, originalEndsAt }) {
   return novoFim.getTime() > endsAt.getTime() ? novoFim : null;
 }
 
+// Prorrogação pedida pelo comitente (além da automática do RF15).
+// Soma minutos ao término, respeitando o mesmo teto de 30 minutos acumulados.
+function calcularProrrogacaoManual({ endsAt, originalEndsAt, minutos }) {
+  const limite = originalEndsAt.getTime() + LIMITES.prorrogacaoAcumuladaMaxSegundos * 1000;
+  const proposto = endsAt.getTime() + minutos * 60 * 1000;
+  const novoFim = new Date(Math.min(proposto, limite));
+
+  if (novoFim.getTime() <= endsAt.getTime()) {
+    throw erro(
+      409,
+      'Este leilão já atingiu o limite de prorrogação (30 minutos)',
+      'PRORROGACAO_NO_LIMITE'
+    );
+  }
+  return novoFim;
+}
+
 // Dica do edital (RF09): identificar o líder sem expor o nome completo.
 function mascararNome(nome) {
   if (typeof nome !== 'string' || !nome.trim()) return '—';
@@ -239,6 +258,7 @@ module.exports = {
   validarCriacao,
   validarLance,
   calcularProrrogacao,
+  calcularProrrogacaoManual,
   validarFotos,
   mascararNome,
 };

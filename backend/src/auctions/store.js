@@ -423,4 +423,51 @@ async function cancelar({ leilaoId, usuario }) {
   return buscar(leilaoId);
 }
 
-module.exports = { listar, buscar, criar, historico, darLance, cancelar, atualizarEstados, paraApi };
+// Prorrogação pedida pelo comitente: soma minutos ao término, com teto de 30
+// minutos acumulados sobre o término original.
+async function prorrogar({ leilaoId, usuario, minutos }) {
+  if (typeof leilaoId !== 'string' || !UUID.test(leilaoId)) {
+    throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+  }
+
+  const quantidade = Number(minutos ?? regras.LIMITES.prorrogacaoManualPadraoMinutos);
+  if (!Number.isFinite(quantidade) || quantidade < 1 || quantidade > regras.LIMITES.prorrogacaoManualMaxMinutos) {
+    throw regras.erro(
+      400,
+      `Informe de 1 a ${regras.LIMITES.prorrogacaoManualMaxMinutos} minutos`,
+      'MINUTOS_INVALIDOS'
+    );
+  }
+
+  await db.transacao(async (cliente) => {
+    const { rows } = await cliente.query(
+      `SELECT a.status::text AS status, a.ends_at, a.original_ends_at, i.seller_id
+       FROM auctions a
+       JOIN items i ON i.id = a.item_id
+       WHERE a.id = $1
+       FOR UPDATE`,
+      [leilaoId]
+    );
+
+    const linha = rows[0];
+    if (!linha) throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+    if (linha.seller_id !== usuario.id) {
+      throw regras.erro(403, 'Só quem publicou o item pode prorrogar', 'NAO_E_DONO');
+    }
+    if (['SOLD', 'ENDED_NO_BIDS', 'CANCELED'].includes(linha.status)) {
+      throw regras.erro(409, 'Leilão já finalizado, não pode ser prorrogado', 'LEILAO_FINALIZADO');
+    }
+
+    const novoFim = regras.calcularProrrogacaoManual({
+      endsAt: new Date(linha.ends_at),
+      originalEndsAt: new Date(linha.original_ends_at),
+      minutos: quantidade,
+    });
+
+    await cliente.query(`UPDATE auctions SET ends_at = $2 WHERE id = $1`, [leilaoId, novoFim]);
+  });
+
+  return buscar(leilaoId);
+}
+
+module.exports = { listar, buscar, criar, historico, darLance, cancelar, prorrogar, atualizarEstados, paraApi };

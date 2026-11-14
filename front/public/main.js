@@ -258,6 +258,58 @@ function paraInputData(data) {
   return `${data.getFullYear()}-${doisDigitos(data.getMonth() + 1)}-${doisDigitos(data.getDate())}T${doisDigitos(data.getHours())}:${doisDigitos(data.getMinutes())}`;
 }
 
+// ---------------------------------------------------------------- fotos (RF05)
+const FOTOS_PADRAO = [
+  'https://picsum.photos/seed/leilao-1/800/600',
+  'https://picsum.photos/seed/leilao-2/800/600',
+  'https://picsum.photos/seed/leilao-3/800/600',
+];
+
+function adicionarCampoDeFoto(valor = '') {
+  const campos = $('fotos-campos');
+  if (campos.children.length >= 6) {
+    $('fotos-aviso').textContent = 'Máximo de 6 fotos.';
+    return;
+  }
+
+  const linha = document.createElement('div');
+  linha.className = 'linha-foto';
+
+  const input = document.createElement('input');
+  input.type = 'url';
+  input.placeholder = 'https://exemplo.com/foto.jpg';
+  input.value = valor;
+  input.required = true;
+
+  const remover = document.createElement('button');
+  remover.type = 'button';
+  remover.className = 'botao secundario';
+  remover.textContent = 'Remover';
+  remover.addEventListener('click', () => {
+    if ($('fotos-campos').children.length <= 3) {
+      $('fotos-aviso').textContent = 'São necessárias pelo menos 3 fotos.';
+      return;
+    }
+    linha.remove();
+    $('fotos-aviso').textContent = '';
+  });
+
+  linha.append(input, remover);
+  campos.append(linha);
+}
+
+function desenharCamposDeFotos() {
+  const campos = $('fotos-campos');
+  if (campos.children.length > 0) return;
+  for (const url of FOTOS_PADRAO) adicionarCampoDeFoto(url);
+}
+
+function lerFotos() {
+  return [...$('fotos-campos').querySelectorAll('input')]
+    .map((input) => input.value.trim())
+    .filter(Boolean);
+}
+
 function preencherDatasPadrao() {
   if (!$('leilao-inicio').value) {
     $('leilao-inicio').value = paraInputData(new Date(Date.now() + 60 * 1000));
@@ -265,14 +317,7 @@ function preencherDatasPadrao() {
   if (!$('leilao-fim').value) {
     $('leilao-fim').value = paraInputData(new Date(Date.now() + 4 * 60 * 1000));
   }
-  if (!$('leilao-fotos').value) {
-    // Fotos de demonstração (RF05). O servidor aceita qualquer URL http(s) de imagem.
-    $('leilao-fotos').value = [
-      'https://picsum.photos/seed/leilao-1/800/600',
-      'https://picsum.photos/seed/leilao-2/800/600',
-      'https://picsum.photos/seed/leilao-3/800/600',
-    ].join('\n');
-  }
+  desenharCamposDeFotos();
 }
 
 $('btn-novo').addEventListener('click', () => {
@@ -283,6 +328,8 @@ $('btn-novo').addEventListener('click', () => {
 $('btn-cancelar').addEventListener('click', () => {
   $('form-leilao').hidden = true;
 });
+
+$('btn-mais-foto').addEventListener('click', () => adicionarCampoDeFoto());
 
 $('form-leilao').addEventListener('submit', async (evento) => {
   evento.preventDefault();
@@ -300,10 +347,8 @@ $('form-leilao').addEventListener('submit', async (evento) => {
         titulo: $('leilao-titulo').value,
         descricao: $('leilao-descricao').value,
         categoria: $('leilao-categoria').value,
-        fotos: $('leilao-fotos').value
-          .split('\n')
-          .map((linha) => linha.trim())
-          .filter(Boolean),
+        fotos: lerFotos(),
+
         precoInicial: Number($('leilao-preco').value),
         // toISOString converte a hora local do navegador para UTC,
         // que é o que o servidor entende sem ambiguidade de fuso.
@@ -341,6 +386,12 @@ async function carregarDetalhe(id) {
       (leilao.status === 'SCHEDULED' || leilao.status === 'ACTIVE') &&
       leilao.totalLances === 0;
     $('btn-cancelar-leilao').hidden = !podeCancelar;
+    // Prorrogar: dono, enquanto o leilão não terminou
+    $('btn-prorrogar').hidden = !(
+      Boolean(usuario) &&
+      usuario.id === leilao.donoId &&
+      (leilao.status === 'SCHEDULED' || leilao.status === 'ACTIVE')
+    );
     $('det-lance').textContent = formatarDinheiro(leilao.lanceAtual);
     $('det-minimo').textContent = formatarDinheiro(leilao.proximoMinimo);
     $('det-status').textContent = ROTULO_STATUS[leilao.status] || leilao.status;
@@ -445,6 +496,20 @@ $('btn-minimo').addEventListener('click', () => {
   if (leilaoAbertoDados) $('lance-valor').value = leilaoAbertoDados.proximoMinimo.toFixed(2);
 });
 
+// Prorrogação manual pelo comitente
+$('btn-prorrogar').addEventListener('click', async () => {
+  if (!leilaoAberto) return;
+  if (!confirm('Prorrogar este leilão em 5 minutos?')) return;
+  try {
+    await api(`/auctions/${leilaoAberto}/prorrogar`, { metodo: 'POST', corpo: { minutos: 5 } });
+    await carregarDetalhe(leilaoAberto);
+    mensagem('Leilão prorrogado em 5 minutos.');
+  } catch (erro) {
+    mensagem(erro.message, 'erro');
+    await carregarDetalhe(leilaoAberto);
+  }
+});
+
 // RF08: cancelar o próprio leilão (só sem lances e antes de finalizar)
 $('btn-cancelar-leilao').addEventListener('click', async () => {
   if (!leilaoAberto) return;
@@ -525,6 +590,13 @@ function conectarSocket() {
     if (dados.leilaoId !== leilaoAberto) return;
     await carregarDetalhe(leilaoAberto);
     mensagem('O leilão começou. Os lances estão abertos.');
+  });
+
+  // O término mudou (prorrogação manual pelo comitente)
+  socket.on('auction_extended', async (dados) => {
+    if (dados.leilaoId !== leilaoAberto) return;
+    await carregarDetalhe(leilaoAberto);
+    mensagem('O leilão foi prorrogado.');
   });
 
   socket.on('auction_ended', async (dados) => {

@@ -50,6 +50,20 @@ router.post('/:id/cancelar', exigirLogin, async (req, res) => {
   res.json({ leilao });
 });
 
+// Prorrogação manual pedida pelo comitente (além da automática do RF15)
+router.post('/:id/prorrogar', exigirLogin, async (req, res) => {
+  const leilao = await store.prorrogar({
+    leilaoId: req.params.id,
+    usuario: req.usuario,
+    minutos: (req.body || {}).minutos,
+  });
+  req.app.get('io').to(sala(leilao.id)).emit('auction_extended', {
+    leilaoId: leilao.id,
+    endsAt: leilao.endsAt,
+  });
+  res.json({ leilao });
+});
+
 router.post('/:id/bids', exigirLogin, async (req, res) => {
   const corpo = req.body || {};
   const { lance, leilao, repetido } = await store.darLance({
