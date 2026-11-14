@@ -52,7 +52,11 @@ CREATE TABLE auctions (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     CHECK (original_ends_at > starts_at AND ends_at >= original_ends_at),
-    CHECK (current_price >= starting_price AND min_next_bid >= current_price),
+    CHECK (current_price >= starting_price),
+    CONSTRAINT price_progression CHECK (
+        (bid_count = 0 AND current_price = starting_price AND min_next_bid = starting_price)
+        OR (bid_count > 0 AND current_price >= starting_price AND min_next_bid > current_price)
+    ),
     CHECK ((bid_count = 0) = (leader_id IS NULL)),       -- tem líder só se tem lance
     CHECK ((status = 'SOLD') = (winner_id IS NOT NULL)), -- tem vencedor só se vendido
     CHECK (status NOT IN ('SCHEDULED', 'ENDED_NO_BIDS', 'CANCELED') OR bid_count = 0)
