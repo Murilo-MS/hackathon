@@ -41,13 +41,18 @@
           <label>Preço inicial (R$)
             <input id="leilao-preco" type="number" min="0.01" step="0.01" value="100" required>
           </label>
-          <label>Incremento mínimo (R$)
-            <input id="leilao-incremento" type="number" min="0.01" step="0.01" value="10" required>
+          <div class="nota-campo">
+            O incremento mínimo é calculado pelo sistema, conforme a faixa de preço.
+          </div>
+        </div>
+        <div class="duas-colunas">
+          <label>Começa em
+            <input id="leilao-inicio" type="datetime-local" required>
+          </label>
+          <label>Termina em
+            <input id="leilao-fim" type="datetime-local" required>
           </label>
         </div>
-        <label>Duração (minutos)
-          <input id="leilao-duracao" type="number" min="1" max="1440" value="5" required>
-        </label>
         <div class="acoes">
           <button class="botao" type="submit">Publicar leilão</button>
           <button id="btn-cancelar" class="botao secundario" type="button">Cancelar</button>
@@ -58,7 +63,7 @@
       <p id="lista-vazia" class="vazio" hidden>Nenhum leilão ainda. Entre e publique o primeiro.</p>
     </section>
 
-    <!-- ============ DETALHE DO LEILÃO ============ -->
+    <!-- ============ DETALHE / SALA DO LEILÃO ============ -->
     <section id="view-detalhe" hidden>
       <a class="voltar" href="#/">← Voltar para os leilões</a>
 
@@ -76,11 +81,11 @@
             <strong id="det-lance" class="grande">—</strong>
           </div>
           <div>
-            <span class="rotulo">Próximo mínimo</span>
+            <span class="rotulo">Lance mínimo</span>
             <strong id="det-minimo" class="medio">—</strong>
           </div>
           <div>
-            <span class="rotulo">Termina em</span>
+            <span class="rotulo" id="det-tempo-rotulo">Termina em</span>
             <strong id="det-tempo" class="medio">—</strong>
           </div>
         </div>
@@ -135,7 +140,7 @@
     </section>
   </main>
 
-  <footer class="rodape">Hackathon — Node.js, Express e Socket.IO</footer>
+  <footer class="rodape">Hackathon - Lu Cachorros</footer>
 
   <!-- cliente do Socket.IO servido pelo próprio back-end; precisa vir antes do main.js -->
   <script src="/socket.io/socket.io.js"></script>

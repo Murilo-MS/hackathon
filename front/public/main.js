@@ -1,19 +1,33 @@
 // Front do leilão: uma página só, sem framework.
-// Organização: API -> sessão -> telas (lista, detalhe, entrar) -> tempo real -> relógio -> rotas.
+// Organização: API -> sessão -> telas -> tempo real -> relógio -> rotas.
 
 const TOKEN_KEY = 'leilao_token';
 const $ = (id) => document.getElementById(id);
 const dinheiro = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const formatarDinheiro = (valor) => (valor == null ? '—' : dinheiro.format(valor));
 
+// Os códigos de estado são os mesmos do ENUM do banco (dados/leilao_db.sql).
+const ROTULO_STATUS = {
+  SCHEDULED: 'agendado',
+  ACTIVE: 'em andamento',
+  SOLD: 'vendido',
+  ENDED_NO_BIDS: 'encerrado sem lances',
+  CANCELED: 'cancelado',
+};
+const CLASSE_STATUS = {
+  SCHEDULED: 'agendado',
+  ACTIVE: 'aberto',
+  SOLD: 'vendido',
+  ENDED_NO_BIDS: 'encerrado',
+  CANCELED: 'cancelado',
+};
+
 let usuario = null;
-// Diferença entre o relógio do servidor e o do navegador, em milissegundos.
-// Sem isso, um computador com a hora errada mostraria o cronômetro errado.
-let deslocamento = 0;
-let leilaoAberto = null;       // id do leilão em exibição no detalhe
+let deslocamento = 0;          // relógio do servidor - relógio do navegador
+let leilaoAberto = null;       // id do leilão em exibição
 let leilaoAbertoDados = null;  // último retrato recebido do servidor
 let socket = null;
-let recarregouAposEncerrar = false;
+let recarregouAposVirada = false;
 
 // ---------------------------------------------------------------- API
 async function api(caminho, { metodo = 'GET', corpo } = {}) {
@@ -108,6 +122,55 @@ $('form-login').addEventListener('submit', async (evento) => {
   }
 });
 
+// ---------------------------------------------------------------- contadores
+// Um leilão agendado conta até o início; um em andamento conta até o término.
+function alvoDoContador(leilao) {
+  if (leilao.status === 'SCHEDULED') return leilao.startsAt;
+  if (leilao.status === 'ACTIVE') return leilao.endsAt;
+  return null;
+}
+
+function rotuloDoContador(leilao) {
+  if (leilao.status === 'SCHEDULED') return 'Começa em';
+  if (leilao.status === 'ACTIVE') return 'Termina em';
+  return 'Encerrado';
+}
+
+function formatarRestante(ms) {
+  if (ms <= 0) return 'agora';
+  const total = Math.floor(ms / 1000);
+  const dias = Math.floor(total / 86400);
+  const horas = Math.floor((total % 86400) / 3600);
+  const minutos = Math.floor((total % 3600) / 60);
+  const segundos = total % 60;
+  const dois = (n) => String(n).padStart(2, '0');
+  if (dias > 0) return `${dias}d ${dois(horas)}:${dois(minutos)}`;
+  if (horas > 0) return `${horas}:${dois(minutos)}:${dois(segundos)}`;
+  return `${dois(minutos)}:${dois(segundos)}`;
+}
+
+const agoraDoServidor = () => Date.now() + deslocamento;
+
+function atualizarCronometros() {
+  const agora = agoraDoServidor();
+  for (const elemento of document.querySelectorAll('[data-termina]')) {
+    const restante = new Date(elemento.dataset.termina).getTime() - agora;
+    elemento.textContent = formatarRestante(restante);
+    elemento.dataset.encerrado = restante <= 0 ? 'sim' : 'nao';
+  }
+
+  // Rede de segurança: se o evento do Socket.IO não chegar, recarrega o detalhe
+  // uma vez quando o contador zera.
+  const detalheVisivel = !$('view-detalhe').hidden;
+  const alvo = leilaoAbertoDados ? alvoDoContador(leilaoAbertoDados) : null;
+  if (detalheVisivel && alvo && !recarregouAposVirada) {
+    if (new Date(alvo).getTime() - agora <= 0) {
+      recarregouAposVirada = true;
+      carregarDetalhe(leilaoAberto);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- lista
 async function carregarLista() {
   try {
@@ -142,7 +205,7 @@ function desenharLista(leiloes) {
     cartao.className = 'cartao item';
 
     const titulo = document.createElement('h3');
-    titulo.textContent = leilao.titulo; // textContent, nunca innerHTML com dado do usuário
+    titulo.textContent = leilao.titulo; // textContent: nome do usuário nunca vira HTML
 
     const descricao = document.createElement('p');
     descricao.className = 'descricao';
@@ -151,22 +214,22 @@ function desenharLista(leiloes) {
     const numeros = document.createElement('div');
     numeros.className = 'numeros';
     numeros.append(
-      campoNumerico('Lance atual', formatarDinheiro(leilao.maiorLance?.valor), 'grande'),
-      campoNumerico('Próximo mínimo', formatarDinheiro(leilao.proximoMinimo), 'medio'),
-      campoNumerico('Termina em', '—', 'medio', leilao.terminaEm)
+      campoNumerico('Lance atual', formatarDinheiro(leilao.lanceAtual), 'grande'),
+      campoNumerico('Lance mínimo', formatarDinheiro(leilao.proximoMinimo), 'medio'),
+      campoNumerico(rotuloDoContador(leilao), '—', 'medio', alvoDoContador(leilao))
     );
 
     const rodape = document.createElement('div');
     rodape.className = 'rodape-item';
 
     const etiqueta = document.createElement('span');
-    etiqueta.className = `etiqueta ${leilao.status}`;
-    etiqueta.textContent = leilao.status;
+    etiqueta.className = `etiqueta ${CLASSE_STATUS[leilao.status] || ''}`;
+    etiqueta.textContent = ROTULO_STATUS[leilao.status] || leilao.status;
 
     const link = document.createElement('a');
     link.className = 'botao';
     link.href = `#/leilao/${leilao.id}`;
-    link.textContent = 'Abrir';
+    link.textContent = leilao.status === 'ACTIVE' ? 'Entrar na sala' : 'Abrir';
 
     rodape.append(etiqueta, link);
     cartao.append(titulo, descricao, numeros, rodape);
@@ -176,8 +239,27 @@ function desenharLista(leiloes) {
 }
 
 // ---------------------------------------------------------------- criar leilão
+function doisDigitos(n) {
+  return String(n).padStart(2, '0');
+}
+
+// O input datetime-local não tem fuso: o valor é lido como hora local do navegador.
+function paraInputData(data) {
+  return `${data.getFullYear()}-${doisDigitos(data.getMonth() + 1)}-${doisDigitos(data.getDate())}T${doisDigitos(data.getHours())}:${doisDigitos(data.getMinutes())}`;
+}
+
+function preencherDatasPadrao() {
+  if (!$('leilao-inicio').value) {
+    $('leilao-inicio').value = paraInputData(new Date(Date.now() + 60 * 1000));
+  }
+  if (!$('leilao-fim').value) {
+    $('leilao-fim').value = paraInputData(new Date(Date.now() + 4 * 60 * 1000));
+  }
+}
+
 $('btn-novo').addEventListener('click', () => {
   $('form-leilao').hidden = !$('form-leilao').hidden;
+  if (!$('form-leilao').hidden) preencherDatasPadrao();
 });
 
 $('btn-cancelar').addEventListener('click', () => {
@@ -186,6 +268,13 @@ $('btn-cancelar').addEventListener('click', () => {
 
 $('form-leilao').addEventListener('submit', async (evento) => {
   evento.preventDefault();
+
+  const inicio = new Date($('leilao-inicio').value);
+  const fim = new Date($('leilao-fim').value);
+  if (Number.isNaN(inicio.getTime()) || Number.isNaN(fim.getTime())) {
+    return mensagem('Informe o início e o término do leilão.', 'erro');
+  }
+
   try {
     const { leilao } = await api('/auctions', {
       metodo: 'POST',
@@ -193,8 +282,10 @@ $('form-leilao').addEventListener('submit', async (evento) => {
         titulo: $('leilao-titulo').value,
         descricao: $('leilao-descricao').value,
         precoInicial: Number($('leilao-preco').value),
-        incrementoMinimo: Number($('leilao-incremento').value),
-        duracaoMinutos: Number($('leilao-duracao').value),
+        // toISOString converte a hora local do navegador para UTC,
+        // que é o que o servidor entende sem ambiguidade de fuso.
+        inicio: inicio.toISOString(),
+        fim: fim.toISOString(),
       },
     });
     $('form-leilao').reset();
@@ -212,17 +303,26 @@ async function carregarDetalhe(id) {
     const { leilao, historico } = await api(`/auctions/${id}`);
     leilaoAberto = leilao.id;
     leilaoAbertoDados = leilao;
-    recarregouAposEncerrar = false;
+    recarregouAposVirada = false;
     deslocamento = new Date(leilao.agora).getTime() - Date.now();
 
     $('det-titulo').textContent = leilao.titulo;
     $('det-descricao').textContent = leilao.descricao || 'Sem descrição';
     $('det-dono').textContent = `Publicado por ${leilao.donoNome}`;
-    $('det-lance').textContent = formatarDinheiro(leilao.maiorLance?.valor);
+    $('det-lance').textContent = formatarDinheiro(leilao.lanceAtual);
     $('det-minimo').textContent = formatarDinheiro(leilao.proximoMinimo);
-    $('det-status').textContent = leilao.status;
-    $('det-status').className = `etiqueta ${leilao.status}`;
-    $('det-tempo').dataset.termina = leilao.terminaEm;
+    $('det-status').textContent = ROTULO_STATUS[leilao.status] || leilao.status;
+    $('det-status').className = `etiqueta ${CLASSE_STATUS[leilao.status] || ''}`;
+
+    const alvo = alvoDoContador(leilao);
+    $('det-tempo-rotulo').textContent = rotuloDoContador(leilao);
+    if (alvo) {
+      $('det-tempo').dataset.termina = alvo;
+    } else {
+      delete $('det-tempo').dataset.termina;
+      $('det-tempo').textContent = '—';
+    }
+
     $('lance-valor').min = String(leilao.proximoMinimo);
     $('lance-valor').value = leilao.proximoMinimo.toFixed(2);
 
@@ -230,7 +330,6 @@ async function carregarDetalhe(id) {
     atualizarAreaDeLance();
     atualizarCronometros();
 
-    // Avisa o servidor que esta aba está olhando este leilão
     if (socket) socket.emit('join_auction', leilao.id);
   } catch (erro) {
     mensagem(erro.message, 'erro');
@@ -245,7 +344,7 @@ function desenharHistorico(historico) {
   if (!historico.length) {
     const vazio = document.createElement('li');
     vazio.className = 'vazio';
-    vazio.textContent = 'Nenhum lance ainda. Seja o primeiro.';
+    vazio.textContent = 'Nenhum lance ainda.';
     lista.append(vazio);
     return;
   }
@@ -273,9 +372,9 @@ function itemDoHistorico({ usuarioNome, valor, criadoEm }) {
 function atualizarAreaDeLance() {
   if (!leilaoAbertoDados) return;
 
-  const encerrado = leilaoAbertoDados.status !== 'aberto';
-  const ehDono = Boolean(usuario) && usuario.id === leilaoAbertoDados.donoId;
-  const podeLancar = Boolean(usuario) && !encerrado && !ehDono;
+  const leilao = leilaoAbertoDados;
+  const ehDono = Boolean(usuario) && usuario.id === leilao.donoId;
+  const podeLancar = Boolean(usuario) && leilao.status === 'ACTIVE' && !ehDono;
 
   $('form-lance').hidden = !podeLancar;
 
@@ -283,13 +382,16 @@ function atualizarAreaDeLance() {
     $('det-aviso').textContent = 'Entre na sua conta para dar lance.';
   } else if (ehDono) {
     $('det-aviso').textContent = 'Você publicou este item, então não pode dar lance nele.';
-  } else if (encerrado) {
-    const vencedor = leilaoAbertoDados.vencedor;
-    $('det-aviso').textContent = vencedor
-      ? `Leilão encerrado. Vencedor: ${vencedor.usuarioNome} com ${formatarDinheiro(vencedor.valor)}.`
-      : 'Leilão encerrado sem lances.';
+  } else if (leilao.status === 'SCHEDULED') {
+    $('det-aviso').textContent = 'Este leilão está agendado: os lances abrem no horário de início.';
+  } else if (leilao.status === 'SOLD') {
+    $('det-aviso').textContent = `Leilão encerrado. Vendido para ${leilao.vencedor?.usuarioNome} por ${formatarDinheiro(leilao.vencedor?.valor)}.`;
+  } else if (leilao.status === 'ENDED_NO_BIDS') {
+    $('det-aviso').textContent = 'Leilão encerrado sem lances.';
+  } else if (leilao.status === 'CANCELED') {
+    $('det-aviso').textContent = 'Leilão cancelado pelo dono.';
   } else {
-    $('det-aviso').textContent = '';
+    $('det-aviso').textContent = `Incremento mínimo nesta faixa: ${formatarDinheiro(leilao.incrementoAtual)}.`;
   }
 }
 
@@ -304,8 +406,6 @@ $('form-lance').addEventListener('submit', async (evento) => {
       metodo: 'POST',
       corpo: { valor: Number($('lance-valor').value) },
     });
-    // O Socket.IO avisa todos os clientes da sala; recarregar aqui garante que a
-    // tela fique certa mesmo se o evento atrasar ou a conexão cair.
     await carregarDetalhe(leilaoAberto);
     mensagem('Lance registrado!');
   } catch (erro) {
@@ -327,7 +427,6 @@ function conectarSocket() {
     if (leilaoAberto) socket.emit('join_auction', leilaoAberto);
   });
 
-  // Chegou lance novo de outra pessoa (ou o meu, confirmado pelo servidor)
   socket.on('new_bid', (dados) => {
     if (dados.leilaoId !== leilaoAberto) return;
 
@@ -344,6 +443,7 @@ function conectarSocket() {
         usuarioNome: dados.usuarioNome,
         criadoEm: dados.criadoEm,
       };
+      leilaoAbertoDados.lanceAtual = dados.lanceAtual;
       leilaoAbertoDados.proximoMinimo = dados.proximoMinimo;
     }
 
@@ -354,48 +454,22 @@ function conectarSocket() {
     mensagem(`${dados.usuarioNome} deu lance de ${formatarDinheiro(dados.lanceAtual)}`);
   });
 
+  // O leilão agendado abriu no horário: a tela precisa sair de "agendado"
+  socket.on('auction_started', async (dados) => {
+    if (dados.leilaoId !== leilaoAberto) return;
+    await carregarDetalhe(leilaoAberto);
+    mensagem('O leilão começou. Os lances estão abertos.');
+  });
+
   socket.on('auction_ended', async (dados) => {
     if (dados.leilaoId !== leilaoAberto) return;
     await carregarDetalhe(leilaoAberto);
     mensagem(
       dados.vencedor
-        ? `Leilão encerrado. Vencedor: ${dados.vencedor.usuarioNome}.`
+        ? `Leilão encerrado. Vendido para ${dados.vencedor.usuarioNome}.`
         : 'Leilão encerrado sem lances.'
     );
   });
-}
-
-// ---------------------------------------------------------------- relógio
-const agoraDoServidor = () => Date.now() + deslocamento;
-
-function formatarRestante(ms) {
-  if (ms <= 0) return 'Encerrado';
-  const total = Math.floor(ms / 1000);
-  const horas = Math.floor(total / 3600);
-  const minutos = Math.floor((total % 3600) / 60);
-  const segundos = total % 60;
-  const dois = (n) => String(n).padStart(2, '0');
-  return horas > 0 ? `${horas}:${dois(minutos)}:${dois(segundos)}` : `${dois(minutos)}:${dois(segundos)}`;
-}
-
-function atualizarCronometros() {
-  const agora = agoraDoServidor();
-  for (const elemento of document.querySelectorAll('[data-termina]')) {
-    const restante = new Date(elemento.dataset.termina).getTime() - agora;
-    elemento.textContent = formatarRestante(restante);
-    elemento.dataset.encerrado = restante <= 0 ? 'sim' : 'nao';
-  }
-
-  // Rede de segurança: se o evento do Socket.IO não chegar, recarrega o detalhe
-  // uma vez quando o cronômetro zera.
-  const detalheVisivel = !$('view-detalhe').hidden;
-  if (detalheVisivel && leilaoAbertoDados?.status === 'aberto') {
-    const restante = new Date(leilaoAbertoDados.terminaEm).getTime() - agoraDoServidor();
-    if (restante <= 0 && !recarregouAposEncerrar) {
-      recarregouAposEncerrar = true;
-      carregarDetalhe(leilaoAberto);
-    }
-  }
 }
 
 // ---------------------------------------------------------------- rotas
@@ -421,7 +495,6 @@ async function rotear() {
     return;
   }
 
-  // Saiu do detalhe: avisa o servidor para parar de mandar evento deste leilão
   if (leilaoAberto && socket) socket.emit('leave_auction', leilaoAberto);
   leilaoAberto = null;
   leilaoAbertoDados = null;
@@ -444,10 +517,10 @@ window.addEventListener('hashchange', rotear);
     }
   }
 
+  preencherDatasPadrao();
   await rotear();
 
   setInterval(atualizarCronometros, 1000);
-  // Na lista não há evento de "leilão criado"; um refresco lento resolve sem websocket extra
   setInterval(() => {
     if (!$('view-lista').hidden) carregarLista();
   }, 8000);

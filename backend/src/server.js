@@ -6,15 +6,13 @@ const store = require('./auctions/store');
 
 const server = http.createServer(app);
 
-// O Socket.IO usa o mesmo servidor HTTP; as rotas pegam a instância com req.app.get('io')
 const io = new Server(server);
 app.set('io', io);
 
 io.on('connection', (socket) => {
-  // O cliente avisa qual leilão está vendo; ele entra na sala daquele leilão
   socket.on('join_auction', (id) => {
     for (const sala of socket.rooms) {
-      if (sala.startsWith('leilao:')) socket.leave(sala); // não fica em duas ao mesmo tempo
+      if (sala.startsWith('leilao:')) socket.leave(sala);
     }
     socket.join(`leilao:${Number(id)}`);
   });
@@ -24,18 +22,25 @@ io.on('connection', (socket) => {
   });
 });
 
-// Relógio do servidor: a cada segundo fecha os leilões vencidos e avisa a sala.
-// Com muitos leilões isso vira uma consulta por segundo no banco; dá para trocar
-// por um setTimeout calculado para o próximo encerramento.
+// Relógio do servidor (RF16/RF17): a cada segundo aplica as transições de estado.
+// Um leilão agendado abre sozinho no horário, e o que terminou vira vendido ou
+// encerrado sem lances. Isso roda no servidor justamente para não depender de
+// nenhum navegador estar aberto.
 const relogio = setInterval(() => {
-  for (const leilao of store.encerrarVencidos()) {
+  const { abertos, encerrados } = store.atualizarEstados();
+
+  for (const leilao of abertos) {
+    io.to(`leilao:${leilao.id}`).emit('auction_started', { leilaoId: leilao.id });
+  }
+  for (const leilao of encerrados) {
     io.to(`leilao:${leilao.id}`).emit('auction_ended', {
       leilaoId: leilao.id,
+      status: leilao.status,
       vencedor: leilao.vencedor,
     });
   }
 }, 1000);
-relogio.unref(); // não impede o processo de encerrar (útil em testes)
+relogio.unref();
 
 server.listen(config.port, () => {
   console.log(`Servidor rodando na porta ${config.port}`);

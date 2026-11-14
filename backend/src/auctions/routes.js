@@ -4,22 +4,23 @@ const store = require('./store');
 
 const router = express.Router();
 
-// Uma sala do Socket.IO por leilão: quem está vendo o leilão 7 recebe só os lances do 7
 const sala = (id) => `leilao:${Number(id)}`;
 
-// Listagem pública: visitante pode ver os leilões sem estar logado
+// Listagem pública (RF20): visitante vê tudo, entrar na sala exige login.
 router.get('/', (req, res) => {
   res.json({ leiloes: store.listar(), agora: new Date().toISOString() });
 });
 
+// RF05: o criador informa título, descrição, preço inicial, início e término.
+// O incremento NÃO é informado: ele é calculado pela tabela do RF14.
 router.post('/', exigirLogin, (req, res) => {
-  const { titulo, descricao, precoInicial, incrementoMinimo, duracaoMinutos } = req.body || {};
+  const { titulo, descricao, precoInicial, inicio, fim } = req.body || {};
   const leilao = store.criar({
     titulo,
     descricao,
     precoInicial,
-    incrementoMinimo,
-    duracaoMinutos,
+    inicio,
+    fim,
     dono: req.usuario,
   });
   res.status(201).json({ leilao: store.paraApi(leilao) });
@@ -42,8 +43,7 @@ router.post('/:id/bids', exigirLogin, (req, res) => {
     valor: (req.body || {}).valor,
   });
 
-  // Só depois de gravar o lance os clientes da sala são avisados.
-  // Se emitíssemos antes, alguém poderia ver um lance que acabou recusado.
+  // RF11: a sala só vê o novo estado depois que o lance foi gravado de verdade.
   req.app.get('io').to(sala(leilao.id)).emit('new_bid', {
     leilaoId: leilao.id,
     lanceAtual: lance.valor,
