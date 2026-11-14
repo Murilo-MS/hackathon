@@ -9,5 +9,6 @@ function exigir(nome) {
 module.exports = {
   port: process.env.PORT || 3000,
   jwtSecret: exigir('JWT_SECRET'),
+  databaseUrl: exigir('DATABASE_URL'),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1h',
 };

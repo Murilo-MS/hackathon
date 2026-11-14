@@ -1,4 +1,6 @@
 process.env.JWT_SECRET = 'segredo-de-teste';
+// config.js exige DATABASE_URL; nos testes de unidade o banco não é usado
+process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://teste:teste@127.0.0.1:5432/teste';
 const test = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
