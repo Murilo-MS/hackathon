@@ -1,10 +1,4 @@
-# Sobe o sistema completo: PostgreSQL + API Node (que também serve a tela).
-# A porta publicada é a 8080, que é a exigida na avaliação.
-#
-# Uso: docker compose up -d --build
-#      curl http://localhost:8080/health
-
-
+cat << 'EOF' > ~/hackathon/docker-compose.yml
 services:
   db:
     image: postgres:16-alpine
@@ -15,11 +9,10 @@ services:
       POSTGRES_PASSWORD: hackathon_password
       POSTGRES_DB: leilao_db
     ports:
-      # 127.0.0.1 na frente = só a própria VM alcança o banco.
-      # Sem isso o PostgreSQL ficaria exposto na internet.
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./dados:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hackathon_user -d leilao_db"]
       interval: 5s
@@ -28,19 +21,14 @@ services:
 
   backend:
     build:
-      # Contexto na raiz: a imagem precisa de backend/ E front/public/
       context: .
       dockerfile: backend/Dockerfile
     container_name: hackathon_backend
     restart: always
     environment:
       PORT: 8080
-      # O Docker Compose lê a variável JWT_SECRET do arquivo .env na raiz.
-      # Se ele não existir, cai no valor padrão abaixo, que serve só para teste.
       JWT_SECRET: ${JWT_SECRET:-segredo-de-teste-troque-no-arquivo-env}
       JWT_EXPIRES_IN: 1h
-      # Ainda não é usado pelo código (os dados estão em memória), mas já fica
-      # pronto para quando a Pessoa 3 trocar o store.js por consultas reais.
       DATABASE_URL: postgresql://hackathon_user:hackathon_password@db:5432/leilao_db
     ports:
       - "8080:8080"
@@ -49,6 +37,5 @@ services:
         condition: service_healthy
 
 volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./dados:/docker-entrypoint-initdb.d
-
+  postgres_data:
+EOF
