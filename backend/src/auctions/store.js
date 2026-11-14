@@ -1,7 +1,15 @@
-// Armazenamento dos leilões em memória.
-// ATENÇÃO: é temporário. Reiniciar o servidor apaga leilões e lances.
-// Este arquivo é o único que conhece "onde os dados moram"; quando o PostgreSQL
-// entrar, só ele muda de implementação e as rotas continuam iguais.
+// Armazenamento dos leilões em memória (temporário: será trocado pelo PostgreSQL).
+//
+// Ciclo de vida do leilão (RN01 do edital): 5 estados, 5 transições.
+//   SCHEDULED (agendado) --chega o início--> ACTIVE (em andamento)
+//   SCHEDULED --cancelado pelo dono--> CANCELED
+//   ACTIVE --termina com lances--> SOLD (vendido)
+//   ACTIVE --termina sem lances--> ENDED_NO_BIDS (encerrado sem lances)
+//   ACTIVE --cancelado sem lances--> CANCELED
+// Os três últimos são finais: não saem deles.
+//
+// Os códigos ficam em inglês de propósito: são exatamente os valores do ENUM
+// auction_status em dados/leilao_db.sql. Quando o banco entrar, não há tradução.
 
 const leiloes = [];
 const lances = [];
@@ -12,14 +20,32 @@ const LIMITES = {
   tituloMin: 3,
   tituloMax: 80,
   descricaoMax: 500,
-  duracaoMin: 1,
-  duracaoMax: 1440,
+  duracaoMinSegundos: 10, // decisão da equipe: curto o bastante para a demo
+  duracaoMaxSegundos: 24 * 60 * 60,
+  antecedenciaMaxSegundos: 7 * 24 * 60 * 60,
 };
+
+const ROTULOS = {
+  SCHEDULED: 'agendado',
+  ACTIVE: 'em andamento',
+  SOLD: 'vendido',
+  ENDED_NO_BIDS: 'encerrado sem lances',
+  CANCELED: 'cancelado',
+};
+
+// Tabela do RF14: o incremento depende do preço atual, e só dele.
+const FAIXAS = [
+  { ate: 99.99, incremento: 1 },
+  { ate: 499.99, incremento: 5 },
+  { ate: 999.99, incremento: 10 },
+  { ate: 4999.99, incremento: 50 },
+  { ate: 24999.99, incremento: 100 },
+  { ate: Infinity, incremento: 500 },
+];
 
 const reais = (valor) =>
   valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-// Erro com status HTTP: o middleware de erro do app.js transforma em resposta JSON
 function erro(status, mensagem, codigo) {
   const e = new Error(mensagem);
   e.status = status;
@@ -38,7 +64,28 @@ function paraNumero(valor, campo) {
   return arredondar(numero);
 }
 
-function criar({ titulo, descricao, precoInicial, incrementoMinimo, duracaoMinutos, dono }) {
+function paraData(valor, campo) {
+  if (!valor) throw erro(400, `${campo} é obrigatório`, 'DATA_OBRIGATORIA');
+  const data = new Date(valor);
+  if (Number.isNaN(data.getTime())) {
+    throw erro(400, `${campo} inválido`, 'DATA_INVALIDA');
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------- regra RF14
+function incrementoPara(precoAtual) {
+  return FAIXAS.find((faixa) => precoAtual <= faixa.ate).incremento;
+}
+
+// Valor mínimo do próximo lance. Primeiro lance pode ser igual ao preço inicial.
+function proximoMinimo(leilao) {
+  if (!leilao.maiorLance) return leilao.precoInicial;
+  return arredondar(leilao.maiorLance.valor + incrementoPara(leilao.maiorLance.valor));
+}
+
+// ---------------------------------------------------------------- criação
+function criar({ titulo, descricao, precoInicial, inicio, fim, dono }) {
   if (typeof titulo !== 'string') {
     throw erro(400, 'O título é obrigatório', 'TITULO_OBRIGATORIO');
   }
@@ -54,35 +101,46 @@ function criar({ titulo, descricao, precoInicial, incrementoMinimo, duracaoMinut
   const preco = paraNumero(precoInicial, 'O preço inicial');
   if (preco <= 0) throw erro(400, 'O preço inicial precisa ser maior que zero', 'PRECO_INVALIDO');
 
-  const incremento = paraNumero(incrementoMinimo, 'O incremento mínimo');
-  if (incremento <= 0) {
-    throw erro(400, 'O incremento mínimo precisa ser maior que zero', 'INCREMENTO_INVALIDO');
+  const agora = new Date();
+  const comeco = paraData(inicio, 'O início');
+  const termino = paraData(fim, 'O término');
+
+  if (comeco.getTime() < agora.getTime() - 60000) {
+    throw erro(400, 'O início não pode estar no passado', 'INICIO_NO_PASSADO');
+  }
+  if (comeco.getTime() > agora.getTime() + LIMITES.antecedenciaMaxSegundos * 1000) {
+    throw erro(400, 'O início não pode ser mais de 7 dias à frente', 'INICIO_LONGE_DEMAIS');
   }
 
-  const duracao = paraNumero(duracaoMinutos, 'A duração');
-  if (duracao < LIMITES.duracaoMin || duracao > LIMITES.duracaoMax) {
+  const duracaoSegundos = (termino.getTime() - comeco.getTime()) / 1000;
+  if (duracaoSegundos < LIMITES.duracaoMinSegundos) {
     throw erro(
       400,
-      `A duração precisa ficar entre ${LIMITES.duracaoMin} e ${LIMITES.duracaoMax} minutos`,
-      'DURACAO_INVALIDA'
+      `A duração mínima é de ${LIMITES.duracaoMinSegundos} segundos`,
+      'DURACAO_CURTA'
     );
   }
+  if (duracaoSegundos > LIMITES.duracaoMaxSegundos) {
+    throw erro(400, 'A duração máxima é de 24 horas', 'DURACAO_LONGA');
+  }
 
-  const agora = new Date();
   const leilao = {
     id: proximoIdLeilao++,
     titulo: tituloLimpo,
-    descricao: typeof descricao === 'string' ? descricao.trim().slice(0, LIMITES.descricaoMax) : '',
+    descricao:
+      typeof descricao === 'string' ? descricao.trim().slice(0, LIMITES.descricaoMax) : '',
     precoInicial: preco,
-    incrementoMinimo: incremento,
-    criadoEm: agora,
-    terminaEm: new Date(agora.getTime() + duracao * 60000),
+    // Compra: o leilão nasce AGENDADO, mesmo que o início seja agora.
+    // O relógio do servidor promove para ACTIVE no instante do início.
+    startsAt: comeco,
+    endsAt: termino,
+    status: 'SCHEDULED',
     donoId: dono.id,
     donoNome: dono.nome,
-    status: 'aberto',
     maiorLance: null,
     vencedor: null,
     encerradoEm: null,
+    criadoEm: agora,
   };
   leiloes.push(leilao);
   return leilao;
@@ -95,31 +153,27 @@ function buscar(id) {
   return leilao;
 }
 
-// Quanto vale o próximo lance: o primeiro pode ser igual ao preço inicial,
-// os seguintes precisam superar o maior lance em pelo menos um incremento.
-function proximoMinimo(leilao) {
-  return leilao.maiorLance
-    ? arredondar(leilao.maiorLance.valor + leilao.incrementoMinimo)
-    : leilao.precoInicial;
-}
-
 function paraApi(leilao) {
   return {
     id: leilao.id,
     titulo: leilao.titulo,
     descricao: leilao.descricao,
     precoInicial: leilao.precoInicial,
-    incrementoMinimo: leilao.incrementoMinimo,
-    donoNome: leilao.donoNome,
     donoId: leilao.donoId,
-    maiorLance: leilao.maiorLance,
-    proximoMinimo: proximoMinimo(leilao),
+    donoNome: leilao.donoNome,
     status: leilao.status,
-    terminaEm: leilao.terminaEm.toISOString(),
+    statusRotulo: ROTULOS[leilao.status],
+    maiorLance: leilao.maiorLance,
+    // Preço atual e próximo mínimo são calculados, nunca digitados
+    lanceAtual: leilao.maiorLance ? leilao.maiorLance.valor : null,
+    incrementoAtual: incrementoPara(
+      leilao.maiorLance ? leilao.maiorLance.valor : leilao.precoInicial
+    ),
+    proximoMinimo: proximoMinimo(leilao),
+    startsAt: leilao.startsAt.toISOString(),
+    endsAt: leilao.endsAt.toISOString(),
     encerradoEm: leilao.encerradoEm,
     vencedor: leilao.vencedor,
-    // O front usa este campo para acertar o cronômetro com o relógio do servidor,
-    // que é a única fonte de verdade sobre o horário de encerramento.
     agora: new Date().toISOString(),
   };
 }
@@ -128,15 +182,16 @@ function listar() {
   return leiloes
     .map(paraApi)
     .sort((a, b) => {
-      if (a.status !== b.status) return a.status === 'aberto' ? -1 : 1;
-      return a.terminaEm.localeCompare(b.terminaEm);
+      const ordem = { ACTIVE: 0, SCHEDULED: 1, SOLD: 2, ENDED_NO_BIDS: 3, CANCELED: 4 };
+      if (ordem[a.status] !== ordem[b.status]) return ordem[a.status] - ordem[b.status];
+      return a.endsAt.localeCompare(b.endsAt);
     });
 }
 
 function historico(leilaoId) {
   return lances
     .filter((l) => l.leilaoId === Number(leilaoId))
-    .sort((a, b) => b.id - a.id) // mais recente primeiro
+    .sort((a, b) => b.id - a.id)
     .map((l) => ({
       id: l.id,
       usuarioNome: l.usuarioNome,
@@ -145,13 +200,18 @@ function historico(leilaoId) {
     }));
 }
 
+// ---------------------------------------------------------------- lance
 function darLance({ leilaoId, usuario, valor }) {
   const leilao = buscar(leilaoId);
+  const agora = new Date();
 
-  // Validação e gravação acontecem juntas, sem nenhum "await" no meio.
-  // Em Node isso é atômico: nenhuma outra requisição entra entre o "if" e o "push".
-  // Com PostgreSQL, essa garantia vem do BEGIN + SELECT ... FOR UPDATE.
-  if (leilao.status !== 'aberto' || new Date() >= leilao.terminaEm) {
+  // RF10: todas as condições validadas no momento em que o lance é processado.
+  // Sem nenhum "await" entre validar e gravar: em Node isso é atômico.
+  // Com PostgreSQL, a mesma garantia vem de BEGIN + SELECT ... FOR UPDATE.
+  if (leilao.status === 'SCHEDULED') {
+    throw erro(409, 'O leilão ainda não começou', 'LEILAO_AGENDADO');
+  }
+  if (leilao.status !== 'ACTIVE' || agora >= leilao.endsAt) {
     throw erro(409, 'Este leilão já foi encerrado', 'LEILAO_ENCERRADO');
   }
   if (leilao.donoId === usuario.id) {
@@ -165,13 +225,16 @@ function darLance({ leilaoId, usuario, valor }) {
 
   const minimo = proximoMinimo(leilao);
   if (valorLance < minimo) {
-    throw erro(400, `O lance mínimo agora é ${reais(minimo)}`, 'LANCE_ABAIXO_DO_MINIMO');
+    throw erro(
+      400,
+      `O lance mínimo agora é ${reais(minimo)} (incremento de ${reais(incrementoPara(leilao.maiorLance ? leilao.maiorLance.valor : leilao.precoInicial))})`,
+      'LANCE_ABAIXO_DO_MINIMO'
+    );
   }
   if (leilao.maiorLance && leilao.maiorLance.usuarioId === usuario.id) {
     throw erro(409, 'Você já é o maior lance deste leilão', 'JA_E_O_MAIOR');
   }
 
-  const agora = new Date();
   const lance = {
     id: proximoLanceId++,
     leilaoId: leilao.id,
@@ -191,14 +254,22 @@ function darLance({ leilaoId, usuario, valor }) {
   return { lance, leilao };
 }
 
-// Chamado a cada segundo pelo server.js: fecha o que passou do horário
-function encerrarVencidos() {
+// ---------------------------------------------------------------- relógio
+// Chamado a cada segundo pelo server.js. Devolve o que mudou para o server
+// avisar as salas: quem abriu e quem fechou.
+function atualizarEstados() {
   const agora = new Date();
+  const abertos = [];
   const encerrados = [];
+
   for (const leilao of leiloes) {
-    if (leilao.status === 'aberto' && agora >= leilao.terminaEm) {
-      leilao.status = 'encerrado';
-      leilao.encerradoEm = leilao.terminaEm.toISOString();
+    if (leilao.status === 'SCHEDULED' && agora >= leilao.startsAt) {
+      leilao.status = 'ACTIVE';
+      abertos.push(leilao);
+    }
+    if (leilao.status === 'ACTIVE' && agora >= leilao.endsAt) {
+      leilao.status = leilao.maiorLance ? 'SOLD' : 'ENDED_NO_BIDS';
+      leilao.encerradoEm = leilao.endsAt.toISOString();
       leilao.vencedor = leilao.maiorLance
         ? {
             usuarioId: leilao.maiorLance.usuarioId,
@@ -209,7 +280,8 @@ function encerrarVencidos() {
       encerrados.push(leilao);
     }
   }
-  return encerrados;
+
+  return { abertos, encerrados };
 }
 
 module.exports = {
@@ -218,7 +290,8 @@ module.exports = {
   listar,
   historico,
   darLance,
-  encerrarVencidos,
+  atualizarEstados,
   paraApi,
   proximoMinimo,
+  incrementoPara,
 };

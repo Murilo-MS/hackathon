@@ -1,7 +1,7 @@
 # Contrato da API — Leilão Online
 
 Tudo trafega em JSON. Erros sempre no formato `{ "erro": "mensagem" }`.
-Rotas marcadas com 🔒 exigem o cabeçalho `Authorization: Bearer <token>`.
+Rotas marcadas com 🔒 exigem `Authorization: Bearer <token>`.
 
 ## Autenticação
 
@@ -18,10 +18,15 @@ Rotas marcadas com 🔒 exigem o cabeçalho `Authorization: Bearer <token>`.
 | Método | Rota | Corpo | Resposta |
 |---|---|---|---|
 | GET | `/auctions` | — | `200 { leiloes: [...], agora }` |
-| POST | `/auctions` 🔒 | `{ titulo, descricao, precoInicial, incrementoMinimo, duracaoMinutos }` | `201 { leilao }` |
+| POST | `/auctions` 🔒 | `{ titulo, descricao, precoInicial, inicio, fim }` | `201 { leilao }` |
 | GET | `/auctions/:id` | — | `200 { leilao, historico }` |
 | GET | `/auctions/:id/bids` | — | `200 { historico }` |
 | POST | `/auctions/:id/bids` 🔒 | `{ valor }` | `201 { lance, leilao }` |
+
+`inicio` e `fim` são datas ISO 8601 em UTC (`2026-11-14T21:00:00.000Z`). O front converte
+o `datetime-local` do formulário com `toISOString()`, porque o input não carrega fuso.
+
+**Não existe campo de incremento.** Ele é derivado do preço atual (RF14), no servidor.
 
 Objeto `leilao`:
 
@@ -31,50 +36,79 @@ Objeto `leilao`:
   "titulo": "Bicicleta aro 29",
   "descricao": "Quadro de alumínio",
   "precoInicial": 100,
-  "incrementoMinimo": 10,
   "donoId": 1,
   "donoNome": "Marina",
+  "status": "ACTIVE",
+  "statusRotulo": "em andamento",
   "maiorLance": { "usuarioId": 2, "usuarioNome": "Ana", "valor": 120, "criadoEm": "..." },
-  "proximoMinimo": 130,
-  "status": "aberto",
-  "terminaEm": "2026-11-14T21:00:00.000Z",
+  "lanceAtual": 120,
+  "incrementoAtual": 5,
+  "proximoMinimo": 125,
+  "startsAt": "2026-11-14T20:00:00.000Z",
+  "endsAt": "2026-11-14T20:15:00.000Z",
   "encerradoEm": null,
   "vencedor": null,
-  "agora": "2026-11-14T20:45:00.000Z"
+  "agora": "2026-11-14T20:05:00.000Z"
 }
 ```
 
-`maiorLance` é `null` enquanto ninguém deu lance. `agora` é o relógio do servidor: o front usa
-a diferença entre ele e o relógio do navegador para o cronômetro não mentir.
+- `lanceAtual` é `null` enquanto ninguém deu lance.
+- `incrementoAtual` é o incremento aplicável ao preço atual.
+- `agora` é o relógio do servidor; o front usa a diferença para o cronômetro não mentir.
 
-Objeto `lance` do histórico: `{ id, usuarioNome, valor, criadoEm }`.
+## Estados (RN01) e transições
 
-## Regras de lance (validadas no servidor, nesta ordem)
+| Estado | Significado | Pode sair para |
+|---|---|---|
+| `SCHEDULED` | agendado | `ACTIVE` (chegou o início), `CANCELED` |
+| `ACTIVE` | em andamento | `SOLD` (terminou com lances), `ENDED_NO_BIDS` (terminou sem lances), `CANCELED` (só sem lances) |
+| `SOLD` | vendido | — final |
+| `ENDED_NO_BIDS` | encerrado sem lances | — final |
+| `CANCELED` | cancelado | — final |
+
+Os códigos são iguais ao ENUM `auction_status` de `dados/leilao_db.sql`. O rótulo em
+português vem em `statusRotulo`, para a tela não traduzir nada.
+
+Quem aplica as transições é o relógio do servidor, a cada segundo, sem depender de
+navegador aberto (RF17). Ao mudar, o servidor emite evento na sala do leilão.
+
+## Tabela de incremento (RF14)
+
+| Preço atual | Incremento |
+|---|---|
+| até R$ 99,99 | R$ 1,00 |
+| R$ 100,00 a R$ 499,99 | R$ 5,00 |
+| R$ 500,00 a R$ 999,99 | R$ 10,00 |
+| R$ 1.000,00 a R$ 4.999,99 | R$ 50,00 |
+| R$ 5.000,00 a R$ 24.999,99 | R$ 100,00 |
+| a partir de R$ 25.000,00 | R$ 500,00 |
+
+`proximoMinimo` = primeiro lance: `precoInicial`; depois: `lanceAtual + incrementoAtual`.
+
+## Regras de lance (RF10), nesta ordem
 
 1. Leilão existe → senão `404`.
-2. Leilão aberto e `agora < terminaEm` → senão `409 LEILAO_ENCERRADO`.
-3. Quem dá o lance não é o dono → senão `403 DONO_DO_LEILAO`.
+2. Estado `ACTIVE` e `agora < endsAt` → `SCHEDULED` responde `409 LEILAO_AGENDADO`;
+   finalizado responde `409 LEILAO_ENCERRADO`.
+3. Autor não é o dono → senão `403 DONO_DO_LEILAO`.
 4. `valor > 0` → senão `400`.
 5. `valor >= proximoMinimo` → senão `400 LANCE_ABAIXO_DO_MINIMO`.
-6. `valor` não é do mesmo usuário que já lidera → senão `409 JA_E_O_MAIOR`.
-
-`proximoMinimo` = primeiro lance: `precoInicial`; depois: `maiorLance.valor + incrementoMinimo`.
+6. Autor não é o líder atual → senão `409 JA_E_O_MAIOR`.
 
 ## Tempo real (Socket.IO)
 
-O cliente do Socket.IO é servido em `/socket.io/socket.io.js`.
+Cliente servido em `/socket.io/socket.io.js`. Uma sala por leilão: `leilao:<id>`.
 
 | Direção | Evento | Carga |
 |---|---|---|
-| cliente → servidor | `join_auction` | `id` do leilão |
-| cliente → servidor | `leave_auction` | `id` do leilão |
+| cliente → servidor | `join_auction` | `id` |
+| cliente → servidor | `leave_auction` | `id` |
 | servidor → sala | `new_bid` | `{ leilaoId, lanceAtual, proximoMinimo, usuarioNome, criadoEm }` |
-| servidor → sala | `auction_ended` | `{ leilaoId, vencedor }` |
+| servidor → sala | `auction_started` | `{ leilaoId }` |
+| servidor → sala | `auction_ended` | `{ leilaoId, status, vencedor }` |
 
-Cada leilão tem a sala `leilao:<id>`. O evento só é emitido **depois** de o lance ser gravado.
+## Códigos de erro
 
-## Códigos de erro usados
-
-`400` dados inválidos · `401` sem sessão ou sessão expirada · `403` regra de negócio (dono) ·
-`404` não encontrado · `409` conflito (encerrado, já é o maior) · `413` corpo grande ·
-`500` erro interno (nunca detalhado para o cliente).
+`400` dados inválidos · `401` sem sessão ou expirada · `403` regra de negócio ·
+`404` não encontrado · `409` conflito de estado · `413` corpo grande ·
+`500` erro interno (nunca detalhado ao cliente).
