@@ -187,7 +187,6 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
               a.starting_price,
               a.leader_id,
               a.ends_at,
-              a.original_ends_at,
               i.seller_id
        FROM auctions a
        JOIN items i ON i.id = a.item_id
@@ -206,7 +205,6 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
       donoId: linha.seller_id,
       leaderId: linha.leader_id,
       endsAt: new Date(linha.ends_at),
-      originalEndsAt: new Date(linha.original_ends_at),
     };
 
     const validado = regras.validarLance({ leilao: estado, usuario, valor });
@@ -234,7 +232,6 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
       throw erro;
     }
 
-<<<<<<< HEAD
     // Atualiza preço, líder, contagem e aplica prorrogação de 2 min se estiver no fim (RF15)
     await cliente.query(
       `UPDATE auctions
@@ -247,21 +244,8 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
                THEN clock_timestamp() + INTERVAL '2 minutes'
              ELSE ends_at
            END
-=======
-    // RF15: lance nos 2 minutos finais empurra o término (máx. 30 min acumulados)
-    const novoFim = regras.calcularProrrogacao({
-      agora: new Date(),
-      endsAt: estado.endsAt,
-      originalEndsAt: estado.originalEndsAt,
-    });
-
-    await cliente.query(
-      `UPDATE auctions
-       SET current_price = $2, min_next_bid = $3, leader_id = $4,
-           bid_count = bid_count + 1, ends_at = $5
->>>>>>> 1d2bab7862e15462984bd00ac11d497132083565
        WHERE id = $1`,
-      [leilaoId, validado.valorLance, proximo, usuario.id, novoFim ?? estado.endsAt]
+      [leilaoId, validado.valorLance, proximo, usuario.id]
     );
 
     return { lance: inserido.rows[0], valorLance: validado.valorLance };

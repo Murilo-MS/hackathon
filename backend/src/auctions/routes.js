@@ -15,15 +15,15 @@ router.get('/', async (req, res) => {
 // RF05: título, descrição, categoria, fotos, preço inicial, início e término.
 // O incremento NÃO é informado: vem da tabela do RF14.
 router.post('/', exigirLogin, async (req, res) => {
-  const { titulo, descricao, categoria, fotos, precoInicial, inicio, fim } = req.body || {};
+  const { titulo, descricao, categoria, precoInicial, inicio, fim, fotos } = req.body || {};
   const leilao = await store.criar({
     titulo,
     descricao,
     categoria,
-    fotos,
     precoInicial,
     inicio,
     fim,
+    fotos,
     dono: req.usuario,
   });
   res.status(201).json({ leilao });
