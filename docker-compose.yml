@@ -1,0 +1,45 @@
+services:
+  # 1. Banco de Dados (Postgres)
+  db:
+    image: postgres:16-alpine
+    container_name: hackathon_db
+    restart: always
+    environment:
+      POSTGRES_USER: hackathon_user
+      POSTGRES_PASSWORD: hackathon_password
+      POSTGRES_DB: leilao_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2. Backend (API Node.js)
+  backend:
+    build: ./backend
+    container_name: hackathon_backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    environment:
+      # Variáveis de ambiente que garantem a conexão com o banco
+      DATABASE_URL: "postgresql://hackathon_user:hackathon_password@db:5432/leilao_db"
+      PORT: 3000
+    depends_on:
+      - db
+
+  # 3. Frontend (Site)
+  # ATENÇÃO: Descomente este bloco quando a pasta "front" estiver pronta e com Dockerfile.
+  # Lembre-se que a regra do Hackathon exige que ele escute na porta 8080.
+  # front:
+  #   build: ./front  # Nome da pasta do frontend
+  #   container_name: hackathon_frontend
+  #   restart: always
+  #   ports:
+  #     - "8080:80"   # Se for React/Vite com Nginx, a porta interna é 80. Se for Node puro, pode ser 5173 ou 3000.
+  #   depends_on:
+  #     - backend
+
+volumes:
+  postgres_data:
