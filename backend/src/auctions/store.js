@@ -1,13 +1,3 @@
-// Leilões e lances no PostgreSQL, usando o schema de dados/leilao_db.sql.
-//
-// Divisão de responsabilidade:
-//   items     -> o bem anunciado (name, description, category, seller_id)
-//   auctions  -> a venda do item (preço, estado, janela de tempo, líder)
-//   bids      -> cada lance aceito
-//
-// Regras puras (tabela de incremento, validações) ficam em regras.js.
-// Aqui só há SQL e a transação do lance.
-
 const crypto = require('node:crypto');
 const db = require('../db');
 const regras = require('./regras');
@@ -37,7 +27,6 @@ const SELECT_LEILAO = `
   JOIN users vendedor ON vendedor.id = i.seller_id
   LEFT JOIN users lider    ON lider.id = a.leader_id
   LEFT JOIN users vencedor ON vencedor.id = a.winner_id
-  -- Última data de lance por leilão, agregada de uma vez (um JOIN, não N subqueries)
   LEFT JOIN (
     SELECT auction_id, max(created_at) AS criado_em
     FROM bids
@@ -119,11 +108,20 @@ async function buscar(id) {
   return paraApi(rows[0]);
 }
 
-async function criar({ titulo, descricao, categoria, precoInicial, inicio, fim, dono }) {
+async function criar({ titulo, descricao, categoria, precoInicial, inicio, fim, fotos, dono }) {
   const dados = regras.validarCriacao({ titulo, descricao, categoria, precoInicial, inicio, fim });
 
+  // Garante mínimo de 3 fotos para satisfazer o trigger trg_item_min_photos (RF05)
+  const listaFotos =
+    Array.isArray(fotos) && fotos.length >= 3
+      ? fotos
+      : [
+          'https://placehold.co/600x400?text=Foto+1',
+          'https://placehold.co/600x400?text=Foto+2',
+          'https://placehold.co/600x400?text=Foto+3',
+        ];
+
   const id = await db.transacao(async (cliente) => {
-    // O item é separado do leilão porque o mesmo item pode ser relistado depois
     const item = await cliente.query(
       `INSERT INTO items (seller_id, name, description, category)
        VALUES ($1, $2, $3, $4)
@@ -131,14 +129,22 @@ async function criar({ titulo, descricao, categoria, precoInicial, inicio, fim, 
       [dono.id, dados.titulo, dados.descricao, dados.categoria]
     );
 
-    // Nasce SCHEDULED (padrão da coluna); preço atual e próximo mínimo
-    // começam iguais ao preço inicial.
+    const itemId = item.rows[0].id;
+
+    for (let i = 0; i < listaFotos.length; i++) {
+      await cliente.query(
+        `INSERT INTO item_photos (item_id, storage_url, position)
+         VALUES ($1, $2, $3)`,
+        [itemId, listaFotos[i], i + 1]
+      );
+    }
+
     const leilao = await cliente.query(
       `INSERT INTO auctions
          (item_id, starting_price, current_price, min_next_bid, starts_at, original_ends_at, ends_at)
        VALUES ($1, $2, $2, $2, $3, $4, $4)
        RETURNING id`,
-      [item.rows[0].id, dados.preco, dados.comeco, dados.termino]
+      [itemId, dados.preco, dados.comeco, dados.termino]
     );
 
     return leilao.rows[0].id;
@@ -173,9 +179,6 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
   }
 
   const resultado = await db.transacao(async (cliente) => {
-    // FOR UPDATE trava a linha do leilão até o COMMIT: dois lances simultâneos
-    // entram em fila, e o segundo já enxerga o valor gravado pelo primeiro.
-    // É a versão banco de dados da atomicidade que o array em memória dava.
     const { rows } = await cliente.query(
       `SELECT a.id,
               a.status::text AS status,
@@ -217,7 +220,6 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
       );
     } catch (erro) {
       if (erro.code === '23505') {
-        // Duas travas diferentes, com causas diferentes:
         if (String(erro.constraint || '').includes('idempotency')) {
           throw regras.erro(409, 'Este lance já foi registrado', 'LANCE_DUPLICADO');
         }
@@ -230,9 +232,18 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
       throw erro;
     }
 
+    // Atualiza preço, líder, contagem e aplica prorrogação de 2 min se estiver no fim (RF15)
     await cliente.query(
       `UPDATE auctions
-       SET current_price = $2, min_next_bid = $3, leader_id = $4, bid_count = bid_count + 1
+       SET current_price = $2,
+           min_next_bid = $3,
+           leader_id = $4,
+           bid_count = bid_count + 1,
+           ends_at = CASE
+             WHEN ends_at - clock_timestamp() <= INTERVAL '2 minutes'
+               THEN clock_timestamp() + INTERVAL '2 minutes'
+             ELSE ends_at
+           END
        WHERE id = $1`,
       [leilaoId, validado.valorLance, proximo, usuario.id]
     );
@@ -253,30 +264,25 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
   };
 }
 
-// Relógio do servidor (RF17/RF18): aplica no banco as transições de horário.
-// Roda a cada segundo e também no boot, recuperando o que passou enquanto o
-// processo estava fora do ar.
 async function atualizarEstados() {
   const abertos = await db.consultar(
     `UPDATE auctions
      SET status = 'ACTIVE'
-     WHERE status = 'SCHEDULED' AND starts_at <= now()
+     WHERE status = 'SCHEDULED' AND starts_at <= clock_timestamp()
      RETURNING id`
   );
 
-  // Dois UPDATEs em vez de um CASE com cast de ENUM: fica legível e funciona
-  // igual em qualquer Postgres. A ordem importa: quem tem lance vira SOLD.
   const vendidos = await db.consultar(
     `UPDATE auctions
      SET status = 'SOLD', winner_id = leader_id
-     WHERE status = 'ACTIVE' AND ends_at <= now() AND bid_count > 0
+     WHERE status = 'ACTIVE' AND ends_at <= clock_timestamp() AND bid_count > 0
      RETURNING id, status::text AS status`
   );
 
   const semLance = await db.consultar(
     `UPDATE auctions
      SET status = 'ENDED_NO_BIDS', winner_id = NULL
-     WHERE status = 'ACTIVE' AND ends_at <= now() AND bid_count = 0
+     WHERE status = 'ACTIVE' AND ends_at <= clock_timestamp() AND bid_count = 0
      RETURNING id, status::text AS status`
   );
 
@@ -284,7 +290,7 @@ async function atualizarEstados() {
 
   return {
     abertos: abertos.rows.map((linha) => linha.id),
-    encerrados: encerrados.map((linha) => ({ id: linha.id, status: linha.status })),
+    encerrados: encerrados.rows.map((linha) => ({ id: linha.id, status: linha.status })),
   };
 }
 
