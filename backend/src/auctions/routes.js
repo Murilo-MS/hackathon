@@ -67,6 +67,7 @@ router.post('/:id/bids', exigirLogin, async (req, res) => {
       lanceAtual: lance.valor,
       proximoMinimo: leilao.proximoMinimo,
       totalLances: leilao.totalLances,
+      endsAt: leilao.endsAt,
       usuarioNome: lance.usuarioNome,
       criadoEm: lance.criadoEm,
     });

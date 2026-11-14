@@ -108,6 +108,9 @@ PostgreSQL: users, items, item_photos, auctions, bids
    dentro de cada grupo, pelo término mais próximo.
 10. **Ids UUID.** O banco gera UUID; o front trata o id como texto. Evita colisão quando mais de
     uma instância do back estiver rodando.
+11. **Prorrogação (RF15).** Lance feito nos últimos 2 minutos joga o término para 2 minutos depois
+    do lance, com teto de 30 minutos somados ao término original. O novo horário vai no evento
+    `new_bid`, então o cronômetro de todos se ajusta sem recarregar.
 
 ## O que ficou fora (transparência para o pitch)
 
@@ -115,7 +118,6 @@ PostgreSQL: users, items, item_photos, auctions, bids
   reconexão com aviso de lance superado, "Minhas participações", relistagem.
 - **Bônus:** pontuação/habilitação de comitente, crédito com reserva, HTTPS com domínio,
   múltiplas instâncias com balanceamento, métricas e teste de carga formal.
-- **Prorrogação (RF15):** não implementada. A janela de término é fixa.
 - **Upload de arquivo:** o front envia URLs de imagem; um `POST /fotos` com multipart entra junto
   com as credenciais do bucket fornecido.
 

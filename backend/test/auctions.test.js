@@ -67,3 +67,34 @@ test('validarLance recusa lance de leilão agendado', () => {
     /não começou/
   );
 });
+test('prorrogação (RF15): 2 minutos de janela, teto de 30 minutos', () => {
+  const agora = new Date('2026-01-01T12:00:00Z');
+
+  // longe do fim: não prorroga
+  assert.strictEqual(
+    regras.calcularProrrogacao({
+      agora,
+      endsAt: new Date('2026-01-01T13:00:00Z'),
+      originalEndsAt: new Date('2026-01-01T13:00:00Z'),
+    }),
+    null
+  );
+
+  // nos últimos 2 minutos: termina 2 minutos depois do lance
+  const novo = regras.calcularProrrogacao({
+    agora,
+    endsAt: new Date('2026-01-01T12:00:30Z'),
+    originalEndsAt: new Date('2026-01-01T12:00:30Z'),
+  });
+  assert.strictEqual(novo.toISOString(), '2026-01-01T12:02:00.000Z');
+
+  // teto: 29 minutos já usados deixa só 1 minuto de margem
+  assert.strictEqual(
+    regras.calcularProrrogacao({
+      agora,
+      endsAt: new Date('2026-01-01T12:01:00Z'),
+      originalEndsAt: new Date('2026-01-01T11:31:00Z'),
+    }),
+    null
+  );
+});
