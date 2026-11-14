@@ -166,3 +166,30 @@ form h3 { margin: 0 0 12px; font-size: 16px; }
   .duas-colunas { grid-template-columns: 1fr; }
   .grande { font-size: 22px; }
 }
+/* ---------- fotos do item ---------- */
+.capa {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #e4e7eb;
+}
+.galeria {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+.galeria img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #e4e7eb;
+}
+.galeria[hidden] { display: none !important; }
+
+/* ---------- ação destrutiva ---------- */
+.botao.perigo { background: #b91c1c; }
+.botao.perigo:hover { background: #991b1b; }
+#btn-cancelar-leilao { margin-top: 12px; }

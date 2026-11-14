@@ -37,6 +37,9 @@
         <label>Descrição
           <textarea id="leilao-descricao" maxlength="500" rows="2"></textarea>
         </label>
+        <label>Fotos (uma URL por linha, mínimo 3)
+          <textarea id="leilao-fotos" rows="3" placeholder="https://exemplo.com/foto1.jpg"></textarea>
+        </label>
         <div class="duas-colunas">
           <label>Categoria
             <input id="leilao-categoria" type="text" maxlength="80" placeholder="Eletrônicos, Esportes...">
@@ -76,6 +79,8 @@
 
         <p id="det-descricao" class="descricao"></p>
 
+        <div id="det-galeria" class="galeria"></div>
+
         <div class="numeros">
           <div>
             <span class="rotulo">Lance atual</span>
@@ -89,9 +94,14 @@
             <span class="rotulo" id="det-tempo-rotulo">Termina em</span>
             <strong id="det-tempo" class="medio">—</strong>
           </div>
+          <div>
+            <span class="rotulo">Lances</span>
+            <strong id="det-total" class="medio">0</strong>
+          </div>
         </div>
 
         <p id="det-dono" class="nota"></p>
+        <button id="btn-cancelar-leilao" class="botao perigo" type="button" hidden>Cancelar leilão</button>
 
         <form id="form-lance" class="lance" hidden>
           <label>Seu lance (R$)

@@ -207,6 +207,16 @@ function desenharLista(leiloes) {
     const titulo = document.createElement('h3');
     titulo.textContent = leilao.titulo; // textContent: nome do usuário nunca vira HTML
 
+    const capa = document.createElement('img');
+    capa.className = 'capa';
+    capa.alt = 'Foto do item';
+    capa.loading = 'lazy';
+    if (leilao.fotos && leilao.fotos.length > 0) {
+      capa.src = leilao.fotos[0];
+    } else {
+      capa.hidden = true;
+    }
+
     const descricao = document.createElement('p');
     descricao.className = 'descricao';
     descricao.textContent = leilao.descricao || 'Sem descrição';
@@ -232,7 +242,7 @@ function desenharLista(leiloes) {
     link.textContent = leilao.status === 'ACTIVE' ? 'Entrar na sala' : 'Abrir';
 
     rodape.append(etiqueta, link);
-    cartao.append(titulo, descricao, numeros, rodape);
+    cartao.append(titulo, capa, descricao, numeros, rodape);
     grade.append(cartao);
   }
   atualizarCronometros();
@@ -254,6 +264,14 @@ function preencherDatasPadrao() {
   }
   if (!$('leilao-fim').value) {
     $('leilao-fim').value = paraInputData(new Date(Date.now() + 4 * 60 * 1000));
+  }
+  if (!$('leilao-fotos').value) {
+    // Fotos de demonstração (RF05). O servidor aceita qualquer URL http(s) de imagem.
+    $('leilao-fotos').value = [
+      'https://picsum.photos/seed/leilao-1/800/600',
+      'https://picsum.photos/seed/leilao-2/800/600',
+      'https://picsum.photos/seed/leilao-3/800/600',
+    ].join('\n');
   }
 }
 
@@ -282,6 +300,10 @@ $('form-leilao').addEventListener('submit', async (evento) => {
         titulo: $('leilao-titulo').value,
         descricao: $('leilao-descricao').value,
         categoria: $('leilao-categoria').value,
+        fotos: $('leilao-fotos').value
+          .split('\n')
+          .map((linha) => linha.trim())
+          .filter(Boolean),
         precoInicial: Number($('leilao-preco').value),
         // toISOString converte a hora local do navegador para UTC,
         // que é o que o servidor entende sem ambiguidade de fuso.
@@ -310,6 +332,15 @@ async function carregarDetalhe(id) {
     $('det-titulo').textContent = leilao.titulo;
     $('det-descricao').textContent = leilao.descricao || 'Sem descrição';
     $('det-dono').textContent = `Publicado por ${leilao.donoNome} · Categoria: ${leilao.categoria || 'Geral'}`;
+    desenharGaleria(leilao.fotos);
+    $('det-total').textContent = String(leilao.totalLances ?? 0);
+    // RF08: o botão só aparece para o dono, sem lances, em leilão não finalizado
+    const podeCancelar =
+      Boolean(usuario) &&
+      usuario.id === leilao.donoId &&
+      (leilao.status === 'SCHEDULED' || leilao.status === 'ACTIVE') &&
+      leilao.totalLances === 0;
+    $('btn-cancelar-leilao').hidden = !podeCancelar;
     $('det-lance').textContent = formatarDinheiro(leilao.lanceAtual);
     $('det-minimo').textContent = formatarDinheiro(leilao.proximoMinimo);
     $('det-status').textContent = ROTULO_STATUS[leilao.status] || leilao.status;
@@ -336,6 +367,20 @@ async function carregarDetalhe(id) {
     mensagem(erro.message, 'erro');
     location.hash = '#/';
   }
+}
+
+function desenharGaleria(fotos = []) {
+  const galeria = $('det-galeria');
+  galeria.textContent = '';
+  for (const url of fotos) {
+    const img = document.createElement('img');
+    // O servidor já validou que é http(s) de imagem; aqui só exibimos
+    img.src = url;
+    img.alt = 'Foto do item';
+    img.loading = 'lazy';
+    galeria.append(img);
+  }
+  galeria.hidden = fotos.length === 0;
 }
 
 function desenharHistorico(historico) {
@@ -400,6 +445,20 @@ $('btn-minimo').addEventListener('click', () => {
   if (leilaoAbertoDados) $('lance-valor').value = leilaoAbertoDados.proximoMinimo.toFixed(2);
 });
 
+// RF08: cancelar o próprio leilão (só sem lances e antes de finalizar)
+$('btn-cancelar-leilao').addEventListener('click', async () => {
+  if (!leilaoAberto) return;
+  if (!confirm('Cancelar este leilão? Ele fica registrado como cancelado.')) return;
+  try {
+    await api(`/auctions/${leilaoAberto}/cancelar`, { metodo: 'POST' });
+    await carregarDetalhe(leilaoAberto);
+    mensagem('Leilão cancelado.');
+  } catch (erro) {
+    mensagem(erro.message, 'erro');
+    await carregarDetalhe(leilaoAberto);
+  }
+});
+
 $('form-lance').addEventListener('submit', async (evento) => {
   evento.preventDefault();
   try {
@@ -431,6 +490,7 @@ function conectarSocket() {
   socket.on('new_bid', (dados) => {
     if (dados.leilaoId !== leilaoAberto) return;
 
+    if (dados.totalLances != null) $('det-total').textContent = String(dados.totalLances);
     $('det-lance').textContent = formatarDinheiro(dados.lanceAtual);
     $('det-minimo').textContent = formatarDinheiro(dados.proximoMinimo);
     $('lance-valor').min = String(dados.proximoMinimo);
@@ -492,6 +552,12 @@ async function rotear() {
   // Os ids agora são UUID (vêm do PostgreSQL), não números
   const casaLeilao = hash.match(/^#\/leilao\/([0-9a-f-]{36})$/i);
   if (casaLeilao) {
+    // RF04: a listagem é pública, mas entrar na sala exige login
+    if (!usuario) {
+      mensagem('Entre na sua conta para entrar na sala do leilão.', 'erro');
+      location.hash = '#/entrar';
+      return;
+    }
     mostrarView('detalhe');
     await carregarDetalhe(casaLeilao[1]);
     return;

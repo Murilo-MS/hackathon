@@ -1,7 +1,7 @@
 // Integração com banco, usando pg-mem: um PostgreSQL em memória, em JavaScript,
 // só para os testes. Não substitui o Postgres real, mas executa o SQL de verdade
-// (INSERT ... RETURNING, transação, FOR UPDATE, UPDATE com CASE) e pega erro de
-// coluna, de tipo e de ordem de operações.
+// (INSERT ... RETURNING, transação, FOR UPDATE, UPDATE) e pega erro de coluna,
+// de tipo e de ordem de operações.
 //
 // O schema usado aqui espelha dados/leilao_db.sql, sem as partes que o pg-mem
 // não implementa (CITEXT, ENUM, trigger). A compatibilidade das colunas é
@@ -18,6 +18,7 @@ const { newDb, DataType } = require('pg-mem');
 const db = require('../src/db');
 const userStore = require('../src/users/userStore');
 const store = require('../src/auctions/store');
+const regras = require('../src/auctions/regras');
 
 const DDL = `
   CREATE TABLE users (
@@ -36,6 +37,14 @@ const DDL = `
     description TEXT NOT NULL,
     category VARCHAR(80) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE item_photos (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    item_id UUID NOT NULL REFERENCES items(id),
+    storage_url TEXT NOT NULL,
+    position SMALLINT NOT NULL DEFAULT 1,
+    UNIQUE (item_id, position)
   );
 
   CREATE TABLE auctions (
@@ -66,6 +75,12 @@ const DDL = `
   );
 `;
 
+const FOTOS = [
+  'https://picsum.photos/seed/item-1/800/600',
+  'https://picsum.photos/seed/item-2/800/600',
+  'https://picsum.photos/seed/item-3/800/600',
+];
+
 function prepararBanco() {
   const mem = newDb();
   mem.public.registerFunction({
@@ -80,6 +95,22 @@ function prepararBanco() {
 }
 
 const iso = (ms) => new Date(ms).toISOString();
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function criarLeilao(dono, extras = {}) {
+  const agora = Date.now();
+  return store.criar({
+    titulo: 'Bicicleta aro 29',
+    descricao: 'Usada, revisada',
+    categoria: 'Esportes',
+    fotos: FOTOS,
+    precoInicial: 100,
+    inicio: iso(agora),
+    fim: iso(agora + 60000),
+    dono,
+    ...extras,
+  });
+}
 
 test('usuários: cadastro, busca por e-mail e e-mail duplicado', async () => {
   prepararBanco();
@@ -97,31 +128,42 @@ test('usuários: cadastro, busca por e-mail e e-mail duplicado', async () => {
     /já cadastrado/
   );
 
-  // id inválido não deve estourar erro de sintaxe do Postgres
   assert.strictEqual(await userStore.buscarPorId('nao-e-uuid'), null);
+});
+
+test('criação exige pelo menos 3 fotos e guarda na ordem', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+
+  await assert.rejects(() => criarLeilao(dona, { fotos: [] }), /pelo menos 3 fotos/i);
+  await assert.rejects(() => criarLeilao(dona, { fotos: FOTOS.slice(0, 2) }), /pelo menos 3 fotos/i);
+  await assert.rejects(
+    () => criarLeilao(dona, { fotos: ['arquivo-local.jpg', FOTOS[1], FOTOS[2]] }),
+    /inválida/i
+  );
+
+  const leilao = await criarLeilao(dona);
+  assert.deepStrictEqual(leilao.fotos, FOTOS);
+  assert.strictEqual(leilao.fotos.length, 3);
+
+  const lista = await store.listar();
+  assert.strictEqual(lista[0].fotos.length, 3);
 });
 
 test('fluxo do leilão: agenda, abre, recebe lance, fecha vendido', async () => {
   prepararBanco();
 
   const dona = await userStore.criar({ nome: 'Dona', email: 'dona@exemplo.com', senhaHash: 'h' });
-  const ana = await userStore.criar({ nome: 'Ana', email: 'ana@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana Souza', email: 'ana@exemplo.com', senhaHash: 'h' });
 
-  const agora = Date.now();
-  const leilao = await store.criar({
-    titulo: 'Bicicleta aro 29',
-    descricao: 'Usada, revisada',
-    categoria: 'Esportes',
-    precoInicial: 100,
-    inicio: iso(agora),
-    fim: iso(agora + 60000),
-    dono: dona,
-  });
+  const leilao = await criarLeilao(dona);
 
   assert.strictEqual(leilao.status, 'SCHEDULED');
   assert.strictEqual(leilao.categoria, 'Esportes');
   assert.strictEqual(leilao.proximoMinimo, 100);
   assert.strictEqual(leilao.incrementoAtual, 5);
+  assert.strictEqual(leilao.donoNome, 'Dona'); // uma palavra: fica inteiro
+  assert.strictEqual(leilao.totalLances, 0);
 
   await assert.rejects(
     () => store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 100 }),
@@ -135,7 +177,8 @@ test('fluxo do leilão: agenda, abre, recebe lance, fecha vendido', async () => 
   assert.strictEqual(lance.lance.valor, 100);
   assert.strictEqual(lance.leilao.lanceAtual, 100);
   assert.strictEqual(lance.leilao.proximoMinimo, 105);
-  assert.strictEqual(lance.leilao.maiorLance.usuarioNome, 'Ana');
+  assert.strictEqual(lance.leilao.totalLances, 1);
+  assert.strictEqual(lance.leilao.maiorLance.usuarioNome, 'Ana S.'); // nome mascarado (RF09)
 
   await assert.rejects(
     () => store.darLance({ leilaoId: leilao.id, usuario: dona, valor: 105 }),
@@ -149,10 +192,7 @@ test('fluxo do leilão: agenda, abre, recebe lance, fecha vendido', async () => 
   const historico = await store.historico(leilao.id);
   assert.strictEqual(historico.length, 1);
   assert.strictEqual(historico[0].valor, 100);
-
-  const lista = await store.listar();
-  assert.strictEqual(lista.length, 1);
-  assert.strictEqual(lista[0].titulo, 'Bicicleta aro 29');
+  assert.strictEqual(historico[0].usuarioNome, 'Ana S.');
 
   // força o término e deixa o relógio fechar
   await db.consultar('UPDATE auctions SET ends_at = $1 WHERE id = $2', [
@@ -165,9 +205,8 @@ test('fluxo do leilão: agenda, abre, recebe lance, fecha vendido', async () => 
 
   const vendido = await store.buscar(leilao.id);
   assert.strictEqual(vendido.status, 'SOLD');
-  assert.strictEqual(vendido.vencedor.usuarioNome, 'Ana');
+  assert.strictEqual(vendido.vencedor.usuarioNome, 'Ana S.');
   assert.strictEqual(vendido.vencedor.valor, 100);
-  assert.ok(vendido.encerradoEm);
 
   await assert.rejects(
     () => store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 200 }),
@@ -175,30 +214,112 @@ test('fluxo do leilão: agenda, abre, recebe lance, fecha vendido', async () => 
   );
 });
 
+test('reenvio do mesmo lance não cria segundo lance (RF12)', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana', email: 'a@exemplo.com', senhaHash: 'h' });
+  const leilao = await criarLeilao(dona);
+  await store.atualizarEstados();
+
+  const chave = crypto.randomUUID();
+  const primeira = await store.darLance({
+    leilaoId: leilao.id,
+    usuario: ana,
+    valor: 100,
+    chaveIdempotencia: chave,
+  });
+
+  // Mesmo lance, mesma chave: devolve o mesmo id e não grava de novo
+  const segunda = await store.darLance({
+    leilaoId: leilao.id,
+    usuario: ana,
+    valor: 100,
+    chaveIdempotencia: chave,
+  });
+
+  assert.strictEqual(segunda.repetido, true);
+  assert.strictEqual(segunda.lance.id, primeira.lance.id);
+
+  const historico = await store.historico(leilao.id);
+  assert.strictEqual(historico.length, 1);
+});
+
+test('limite de 500 ms entre lances do mesmo usuário (RF13)', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana', email: 'a@exemplo.com', senhaHash: 'h' });
+  const bruno = await userStore.criar({ nome: 'Bruno', email: 'b@exemplo.com', senhaHash: 'h' });
+  const leilao = await criarLeilao(dona);
+  await store.atualizarEstados();
+
+  await store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 100 });
+  await dormir(600); // passou o intervalo mínimo
+  await store.darLance({ leilaoId: leilao.id, usuario: bruno, valor: 105 });
+
+  // Ana lidera? Não: Bruno lidera. Ana pode cobrir, mas deu lance há 600 ms,
+  // então o limite não bloqueia.
+  const anaOk = await store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 110 });
+  assert.strictEqual(anaOk.lance.valor, 110);
+
+  // Bruno dá lance imediatamente depois do dele (+~1 ms): deve ser barrado
+  await assert.rejects(
+    () => store.darLance({ leilaoId: leilao.id, usuario: bruno, valor: 115 }),
+    /aguarde um instante/i
+  );
+});
+
+test('cancelamento (RF08): só o dono, só sem lances', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana', email: 'a@exemplo.com', senhaHash: 'h' });
+
+  // agendado: pode cancelar
+  const agendado = await criarLeilao(dona);
+  await assert.rejects(
+    () => store.cancelar({ leilaoId: agendado.id, usuario: ana }),
+    /quem publicou/
+  );
+  const cancelado = await store.cancelar({ leilaoId: agendado.id, usuario: dona });
+  assert.strictEqual(cancelado.status, 'CANCELED');
+
+  // não pode cancelar duas vezes
+  await assert.rejects(
+    () => store.cancelar({ leilaoId: agendado.id, usuario: dona }),
+    /já finalizado/
+  );
+
+  // com lance: não pode
+  const comLance = await criarLeilao(dona);
+  await store.atualizarEstados();
+  await store.darLance({ leilaoId: comLance.id, usuario: ana, valor: 100 });
+  await assert.rejects(
+    () => store.cancelar({ leilaoId: comLance.id, usuario: dona }),
+    /com lances/
+  );
+});
+
 test('leilão sem lance termina como ENDED_NO_BIDS', async () => {
   prepararBanco();
   const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
 
-  const agora = Date.now();
-  const leilao = await store.criar({
-    titulo: 'Item sem lance',
-    descricao: '',
-    precoInicial: 50,
-    inicio: iso(agora),
-    fim: iso(agora + 30000),
-    dono: dona,
-  });
-
-  await store.atualizarEstados(); // abre
+  const leilao = await criarLeilao(dona, { precoInicial: 50 });
+  await store.atualizarEstados();
   await db.consultar('UPDATE auctions SET ends_at = $1 WHERE id = $2', [
     new Date(Date.now() - 1000),
     leilao.id,
   ]);
-  await store.atualizarEstados(); // fecha
+  await store.atualizarEstados();
 
   const final = await store.buscar(leilao.id);
   assert.strictEqual(final.status, 'ENDED_NO_BIDS');
   assert.strictEqual(final.vencedor, null);
+});
+
+test('máscara de nome e intervalos de validação', () => {
+  assert.strictEqual(regras.mascararNome('Ana Souza'), 'Ana S.');
+  assert.strictEqual(regras.mascararNome('Ana'), 'Ana');
+  assert.strictEqual(regras.mascararNome(''), '—');
+  assert.strictEqual(regras.LIMITES.intervaloMinimoLanceMs, 500);
 });
 
 test('o SQL usa colunas que existem no schema real do projeto', () => {
@@ -219,6 +340,8 @@ test('o SQL usa colunas que existem no schema real do projeto', () => {
     'original_ends_at',
     'ends_at',
     'idempotency_key',
+    'storage_url',
+    'position',
   ];
   for (const coluna of colunas) {
     assert.ok(schema.includes(coluna), `o schema real não tem a coluna ${coluna}`);

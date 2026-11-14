@@ -19,6 +19,7 @@ const SELECT_LEILAO = `
          i.name                AS titulo,
          i.description         AS descricao,
          i.category            AS categoria,
+         i.id                  AS item_id,
          a.starting_price,
          a.current_price,
          a.status::text        AS status,
@@ -58,7 +59,7 @@ const ORDEM = `
 
 const FINAIS = ['SOLD', 'ENDED_NO_BIDS', 'CANCELED'];
 
-function paraApi(linha) {
+function paraApi(linha, fotos = []) {
   if (!linha) return null;
 
   const precoInicial = Number(linha.starting_price);
@@ -71,17 +72,20 @@ function paraApi(linha) {
     titulo: linha.titulo,
     descricao: linha.descricao,
     categoria: linha.categoria,
+    fotos,
     precoInicial,
     donoId: linha.dono_id,
-    donoNome: linha.dono_nome,
+    // RF09: identifica as pessoas sem expor o nome completo
+    donoNome: regras.mascararNome(linha.dono_nome),
     status: linha.status,
     statusRotulo: regras.ROTULOS[linha.status] || linha.status,
+    totalLances: linha.bid_count,
     maiorLance:
       lanceAtual == null
         ? null
         : {
             usuarioId: linha.leader_id,
-            usuarioNome: linha.lider_nome,
+            usuarioNome: regras.mascararNome(linha.lider_nome),
             valor: lanceAtual,
             criadoEm: linha.ultimo_lance_em
               ? new Date(linha.ultimo_lance_em).toISOString()
@@ -98,16 +102,47 @@ function paraApi(linha) {
         ? null
         : {
             usuarioId: linha.winner_id,
-            usuarioNome: linha.vencedor_nome,
+            usuarioNome: regras.mascararNome(linha.vencedor_nome),
             valor: Number(linha.current_price),
           },
     agora: new Date().toISOString(),
   };
 }
 
+// Busca as URLs das fotos de um item (RF05/RF07)
+async function fotosDoItem(itemId) {
+  const { rows } = await db.consultar(
+    `SELECT storage_url FROM item_photos WHERE item_id = $1 ORDER BY position`,
+    [itemId]
+  );
+  return rows.map((linha) => linha.storage_url);
+}
+
+// Mesma coisa para vários itens de uma vez, para a listagem não fazer N consultas
+async function fotosDeVarios(itens) {
+  const mapa = new Map();
+  const unicos = [...new Set(itens.filter(Boolean))];
+  if (!unicos.length) return mapa;
+
+  const marcadores = unicos.map((_, indice) => `$${indice + 1}`).join(', ');
+  const { rows } = await db.consultar(
+    `SELECT item_id, storage_url FROM item_photos
+     WHERE item_id IN (${marcadores})
+     ORDER BY position`,
+    unicos
+  );
+
+  for (const linha of rows) {
+    if (!mapa.has(linha.item_id)) mapa.set(linha.item_id, []);
+    mapa.get(linha.item_id).push(linha.storage_url);
+  }
+  return mapa;
+}
+
 async function listar() {
   const { rows } = await db.consultar(`${SELECT_LEILAO} ${ORDEM}`);
-  return rows.map(paraApi);
+  const fotos = await fotosDeVarios(rows.map((linha) => linha.item_id));
+  return rows.map((linha) => paraApi(linha, fotos.get(linha.item_id) || []));
 }
 
 async function buscar(id) {
@@ -116,11 +151,13 @@ async function buscar(id) {
   }
   const { rows } = await db.consultar(`${SELECT_LEILAO} WHERE a.id = $1`, [id]);
   if (!rows[0]) throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
-  return paraApi(rows[0]);
+  return paraApi(rows[0], await fotosDoItem(rows[0].item_id));
 }
 
-async function criar({ titulo, descricao, categoria, precoInicial, inicio, fim, dono }) {
+async function criar({ titulo, descricao, categoria, fotos, precoInicial, inicio, fim, dono }) {
   const dados = regras.validarCriacao({ titulo, descricao, categoria, precoInicial, inicio, fim });
+  // RF05: mínimo de 3 fotos; RF07: guardamos apenas a URL
+  const urlsFotos = regras.validarFotos(fotos);
 
   const id = await db.transacao(async (cliente) => {
     // O item é separado do leilão porque o mesmo item pode ser relistado depois
@@ -130,6 +167,14 @@ async function criar({ titulo, descricao, categoria, precoInicial, inicio, fim, 
        RETURNING id`,
       [dono.id, dados.titulo, dados.descricao, dados.categoria]
     );
+
+    // Fotos em ordem, na tabela item_photos (só a URL, nunca o arquivo)
+    for (const [indice, url] of urlsFotos.entries()) {
+      await cliente.query(
+        `INSERT INTO item_photos (item_id, storage_url, position) VALUES ($1, $2, $3)`,
+        [item.rows[0].id, url, indice + 1]
+      );
+    }
 
     // Nasce SCHEDULED (padrão da coluna); preço atual e próximo mínimo
     // começam iguais ao preço inicial.
@@ -161,7 +206,7 @@ async function historico(leilaoId) {
   );
   return rows.map((linha) => ({
     id: linha.id,
-    usuarioNome: linha.nome,
+    usuarioNome: regras.mascararNome(linha.nome),
     valor: Number(linha.amount),
     criadoEm: new Date(linha.created_at).toISOString(),
   }));
@@ -173,6 +218,19 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
   }
 
   const resultado = await db.transacao(async (cliente) => {
+    // RF12: se o mesmo lance chegar de novo (clique duplo, rede caindo), devolve
+    // o resultado original em vez de criar um segundo lance.
+    if (chaveIdempotencia) {
+      const existente = await cliente.query(
+        `SELECT id, auction_id, amount, created_at FROM bids
+         WHERE bidder_id = $1 AND idempotency_key = $2`,
+        [usuario.id, chaveIdempotencia]
+      );
+      if (existente.rows[0]) {
+        return { repetido: true, lance: existente.rows[0] };
+      }
+    }
+
     // FOR UPDATE trava a linha do leilão até o COMMIT: dois lances simultâneos
     // entram em fila, e o segundo já enxerga o valor gravado pelo primeiro.
     // É a versão banco de dados da atomicidade que o array em memória dava.
@@ -207,6 +265,24 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
     const validado = regras.validarLance({ leilao: estado, usuario, valor });
     const proximo = regras.proximoMinimo(estado.precoInicial, validado.valorLance);
 
+    // RF13: no máximo um lance a cada 500 ms por usuário.
+    // A checagem é por (leilão, usuário), então não atrapalha outros participantes.
+    // O reenvio legítimo já saiu antes, no teste de idempotência.
+    const limite = new Date(Date.now() - regras.LIMITES.intervaloMinimoLanceMs);
+    const ultimo = await cliente.query(
+      `SELECT created_at FROM bids
+       WHERE auction_id = $1 AND bidder_id = $2 AND created_at > $3
+       ORDER BY created_at DESC LIMIT 1`,
+      [leilaoId, usuario.id, limite]
+    );
+    if (ultimo.rows[0]) {
+      throw regras.erro(
+        429,
+        'Calma: aguarde um instante entre seus lances',
+        'LANCE_RAPIDO'
+      );
+    }
+
     let inserido;
     try {
       inserido = await cliente.query(
@@ -240,13 +316,27 @@ async function darLance({ leilaoId, usuario, valor, chaveIdempotencia }) {
     return { lance: inserido.rows[0], valorLance: validado.valorLance };
   });
 
+  if (resultado.repetido) {
+    // RF12: mesmo id, mesmo valor, nenhum lance novo
+    return {
+      repetido: true,
+      lance: {
+        id: resultado.lance.id,
+        valor: Number(resultado.lance.amount),
+        usuarioNome: regras.mascararNome(usuario.nome),
+        criadoEm: new Date(resultado.lance.created_at).toISOString(),
+      },
+      leilao: await buscar(resultado.lance.auction_id),
+    };
+  }
+
   const leilaoAtualizado = await buscar(leilaoId);
 
   return {
     lance: {
       id: resultado.lance.id,
       valor: resultado.valorLance,
-      usuarioNome: usuario.nome,
+      usuarioNome: regras.mascararNome(usuario.nome),
       criadoEm: new Date(resultado.lance.created_at).toISOString(),
     },
     leilao: leilaoAtualizado,
@@ -288,4 +378,39 @@ async function atualizarEstados() {
   };
 }
 
-module.exports = { listar, buscar, criar, historico, darLance, atualizarEstados, paraApi };
+// RF08: o comitente cancela enquanto o leilão estiver SCHEDULED ou ACTIVE sem
+// lances. Com lances, não pode. O cancelamento não apaga nada: vira CANCELED.
+async function cancelar({ leilaoId, usuario }) {
+  if (typeof leilaoId !== 'string' || !UUID.test(leilaoId)) {
+    throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+  }
+
+  await db.transacao(async (cliente) => {
+    const { rows } = await cliente.query(
+      `SELECT a.status::text AS status, a.bid_count, i.seller_id
+       FROM auctions a
+       JOIN items i ON i.id = a.item_id
+       WHERE a.id = $1
+       FOR UPDATE`,
+      [leilaoId]
+    );
+
+    const linha = rows[0];
+    if (!linha) throw regras.erro(404, 'Leilão não encontrado', 'LEILAO_NAO_ENCONTRADO');
+    if (linha.seller_id !== usuario.id) {
+      throw regras.erro(403, 'Só quem publicou o item pode cancelar', 'NAO_E_DONO');
+    }
+    if (['SOLD', 'ENDED_NO_BIDS', 'CANCELED'].includes(linha.status)) {
+      throw regras.erro(409, 'Leilão já finalizado, não pode ser cancelado', 'LEILAO_FINALIZADO');
+    }
+    if (linha.bid_count > 0) {
+      throw regras.erro(409, 'Leilão com lances não pode ser cancelado', 'LEILAO_COM_LANCES');
+    }
+
+    await cliente.query(`UPDATE auctions SET status = 'CANCELED' WHERE id = $1`, [leilaoId]);
+  });
+
+  return buscar(leilaoId);
+}
+
+module.exports = { listar, buscar, criar, historico, darLance, cancelar, atualizarEstados, paraApi };
