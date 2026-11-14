@@ -7,32 +7,138 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <header class="topo">
+    <div class="marca">
+      <h1>Leilão Online</h1>
+      <p class="slogan">Lance, acompanhe e vença em tempo real</p>
+    </div>
+    <nav class="sessao">
+      <span id="nome-usuario" class="usuario"></span>
+      <a id="btn-entrar" class="botao" href="#/entrar">Entrar</a>
+      <button id="btn-sair" class="botao secundario" type="button" hidden>Sair</button>
+    </nav>
+  </header>
+
   <main>
-    <h1>Leilão Online</h1>
-    <p id="mensagem" role="alert"></p>
+    <p id="mensagem" role="alert" aria-live="polite"></p>
 
-    <section id="area-visitante">
-      <form id="form-login">
-        <h2>Entrar</h2>
-        <label>E-mail <input id="login-email" type="email" required></label>
-        <label>Senha <input id="login-senha" type="password" required></label>
-        <button type="submit">Entrar</button>
+    <!-- ============ LISTA DE LEILÕES ============ -->
+    <section id="view-lista">
+      <div class="barra">
+        <h2>Leilões</h2>
+        <button id="btn-novo" class="botao" type="button" hidden>Novo leilão</button>
+      </div>
+
+      <form id="form-leilao" class="cartao" hidden>
+        <h3>Cadastrar item</h3>
+        <label>Título
+          <input id="leilao-titulo" type="text" maxlength="80" minlength="3" required>
+        </label>
+        <label>Descrição
+          <textarea id="leilao-descricao" maxlength="500" rows="2"></textarea>
+        </label>
+        <div class="duas-colunas">
+          <label>Preço inicial (R$)
+            <input id="leilao-preco" type="number" min="0.01" step="0.01" value="100" required>
+          </label>
+          <label>Incremento mínimo (R$)
+            <input id="leilao-incremento" type="number" min="0.01" step="0.01" value="10" required>
+          </label>
+        </div>
+        <label>Duração (minutos)
+          <input id="leilao-duracao" type="number" min="1" max="1440" value="5" required>
+        </label>
+        <div class="acoes">
+          <button class="botao" type="submit">Publicar leilão</button>
+          <button id="btn-cancelar" class="botao secundario" type="button">Cancelar</button>
+        </div>
       </form>
 
-      <form id="form-cadastro">
-        <h2>Criar conta</h2>
-        <label>Nome de exibição <input id="cad-nome" type="text" required></label>
-        <label>E-mail <input id="cad-email" type="email" required></label>
-        <label>Senha (mín. 8 caracteres) <input id="cad-senha" type="password" minlength="8" required></label>
-        <button type="submit">Cadastrar</button>
-      </form>
+      <div id="lista-leiloes" class="grade"></div>
+      <p id="lista-vazia" class="vazio" hidden>Nenhum leilão ainda. Entre e publique o primeiro.</p>
     </section>
 
-    <section id="area-logado" hidden>
-      <p>Olá, <strong id="nome-usuario"></strong>!</p>
-      <button id="btn-sair" type="button">Sair</button>
+    <!-- ============ DETALHE DO LEILÃO ============ -->
+    <section id="view-detalhe" hidden>
+      <a class="voltar" href="#/">← Voltar para os leilões</a>
+
+      <article class="cartao destaque">
+        <header class="cabecalho-item">
+          <h2 id="det-titulo"></h2>
+          <span id="det-status" class="etiqueta"></span>
+        </header>
+
+        <p id="det-descricao" class="descricao"></p>
+
+        <div class="numeros">
+          <div>
+            <span class="rotulo">Lance atual</span>
+            <strong id="det-lance" class="grande">—</strong>
+          </div>
+          <div>
+            <span class="rotulo">Próximo mínimo</span>
+            <strong id="det-minimo" class="medio">—</strong>
+          </div>
+          <div>
+            <span class="rotulo">Termina em</span>
+            <strong id="det-tempo" class="medio">—</strong>
+          </div>
+        </div>
+
+        <p id="det-dono" class="nota"></p>
+
+        <form id="form-lance" class="lance" hidden>
+          <label>Seu lance (R$)
+            <input id="lance-valor" type="number" step="0.01" min="0.01" required>
+          </label>
+          <div class="acoes">
+            <button id="btn-minimo" class="botao secundario" type="button">Usar o mínimo</button>
+            <button class="botao" type="submit">Dar lance</button>
+          </div>
+        </form>
+        <p id="det-aviso" class="nota"></p>
+
+        <h3>Histórico de lances</h3>
+        <ul id="lista-lances" class="historico"></ul>
+      </article>
+    </section>
+
+    <!-- ============ ENTRAR / CADASTRAR ============ -->
+    <section id="view-auth" hidden>
+      <a class="voltar" href="#/">← Ver leilões</a>
+      <div class="grade-auth">
+        <form id="form-login" class="cartao">
+          <h2>Entrar</h2>
+          <label>E-mail
+            <input id="login-email" type="email" autocomplete="email" required>
+          </label>
+          <label>Senha
+            <input id="login-senha" type="password" autocomplete="current-password" required>
+          </label>
+          <button class="botao" type="submit">Entrar</button>
+        </form>
+
+        <form id="form-cadastro" class="cartao">
+          <h2>Criar conta</h2>
+          <label>Nome
+            <input id="cad-nome" type="text" maxlength="60" required>
+          </label>
+          <label>E-mail
+            <input id="cad-email" type="email" autocomplete="email" required>
+          </label>
+          <label>Senha (mínimo 8 caracteres)
+            <input id="cad-senha" type="password" minlength="8" autocomplete="new-password" required>
+          </label>
+          <button class="botao" type="submit">Cadastrar</button>
+        </form>
+      </div>
     </section>
   </main>
+
+  <footer class="rodape">Hackathon — Node.js, Express e Socket.IO</footer>
+
+  <!-- cliente do Socket.IO servido pelo próprio back-end; precisa vir antes do main.js -->
+  <script src="/socket.io/socket.io.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 const path = require('path');
 const express = require('express');
 const authRoutes = require('./auth/routes/auth');
+const auctionsRoutes = require('./auctions/routes');
 
 const app = express();
 app.disable('x-powered-by');
@@ -11,6 +12,7 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/auth', authRoutes);
+app.use('/auctions', auctionsRoutes);
 
 app.use(express.static(path.join(__dirname, '..', '..', 'front', 'public')));
 
