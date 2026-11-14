@@ -4,6 +4,7 @@
 # Uso: docker compose up -d --build
 #      curl http://localhost:8080/health
 
+
 services:
   db:
     image: postgres:16-alpine
@@ -48,4 +49,6 @@ services:
         condition: service_healthy
 
 volumes:
-  postgres_data:
+      - postgres_data:/var/lib/postgresql/data
+      - ./dados:/docker-entrypoint-initdb.d
+
