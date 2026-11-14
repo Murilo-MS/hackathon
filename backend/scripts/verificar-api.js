@@ -5,7 +5,7 @@
 const assert = require('node:assert');
 const { io } = require('socket.io-client');
 
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:8093';
+const BASE = process.env.BASE_URL || 'http://200.18.99.113:3000';
 let ok = 0;
 let falhas = 0;
 
