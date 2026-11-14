@@ -10,6 +10,12 @@ const LIMITES = {
   duracaoMaxSegundos: 24 * 60 * 60,
   antecedenciaMaxSegundos: 7 * 24 * 60 * 60,
   toleranciaInicioPassadoMs: 60 * 1000,
+  // RF05: pelo menos 3 fotos. RF07: a equipe decide tipos e tamanhos.
+  fotosMin: 3,
+  fotosMax: 6,
+  fotoUrlMax: 500,
+  // RF13: intervalo mínimo entre lances do MESMO usuário
+  intervaloMinimoLanceMs: 500,
 };
 
 const ROTULOS = {
@@ -151,6 +157,55 @@ function validarLance({ leilao, usuario, valor, agora = new Date() }) {
   return { valorLance, minimo };
 }
 
+// RF05: pelo menos 3 fotos. RF07: guardamos só a URL — o arquivo mora no serviço
+// de armazenamento em nuvem, nunca no banco nem no disco da VM.
+function validarFotos(fotos) {
+  if (!Array.isArray(fotos)) {
+    throw erro(400, `Informe pelo menos ${LIMITES.fotosMin} fotos do item`, 'FOTOS_OBRIGATORIAS');
+  }
+
+  const urls = fotos.map((url) => (typeof url === 'string' ? url.trim() : '')).filter(Boolean);
+
+  if (urls.length < LIMITES.fotosMin) {
+    throw erro(400, `São necessárias pelo menos ${LIMITES.fotosMin} fotos`, 'FOTOS_INSUFICIENTES');
+  }
+  if (urls.length > LIMITES.fotosMax) {
+    throw erro(400, `No máximo ${LIMITES.fotosMax} fotos`, 'FOTOS_DEMAIS');
+  }
+
+  for (const url of urls) {
+    if (url.length > LIMITES.fotoUrlMax) {
+      throw erro(400, 'Endereço de foto muito longo', 'FOTO_LONGA');
+    }
+    let endereco;
+    try {
+      endereco = new URL(url);
+    } catch {
+      throw erro(400, `Foto inválida: ${url}`, 'FOTO_INVALIDA');
+    }
+    if (!['http:', 'https:'].includes(endereco.protocol)) {
+      throw erro(400, `A foto precisa ser um endereço http(s): ${url}`, 'FOTO_INVALIDA');
+    }
+    const pareceImagem = /\.(jpg|jpeg|png|webp|gif)$/i.test(endereco.pathname);
+    const servicoConhecido = /(picsum\.photos|cloudinary\.com|imgur\.com|amazonaws\.com|googleapis\.com|imgbb\.com)/i.test(
+      endereco.hostname
+    );
+    if (!pareceImagem && !servicoConhecido) {
+      throw erro(400, `A foto precisa ser uma imagem (jpg, png, webp): ${url}`, 'FOTO_TIPO');
+    }
+  }
+
+  return urls;
+}
+
+// Dica do edital (RF09): identificar o líder sem expor o nome completo.
+function mascararNome(nome) {
+  if (typeof nome !== 'string' || !nome.trim()) return '—';
+  const partes = nome.trim().split(/\s+/);
+  if (partes.length === 1) return partes[0];
+  return `${partes[0]} ${partes[partes.length - 1][0].toUpperCase()}.`;
+}
+
 module.exports = {
   LIMITES,
   ROTULOS,
@@ -164,4 +219,6 @@ module.exports = {
   paraData,
   validarCriacao,
   validarLance,
+  validarFotos,
+  mascararNome,
 };

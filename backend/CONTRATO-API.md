@@ -18,10 +18,11 @@ Rotas marcadas com 🔒 exigem `Authorization: Bearer <token>`.
 | Método | Rota | Corpo | Resposta |
 |---|---|---|---|
 | GET | `/auctions` | — | `200 { leiloes: [...], agora }` |
-| POST | `/auctions` 🔒 | `{ titulo, descricao, categoria, precoInicial, inicio, fim }` | `201 { leilao }` |
+| POST | `/auctions` 🔒 | `{ titulo, descricao, categoria, fotos, precoInicial, inicio, fim }` | `201 { leilao }` |
 | GET | `/auctions/:id` | — | `200 { leilao, historico }` |
 | GET | `/auctions/:id/bids` | — | `200 { historico }` |
-| POST | `/auctions/:id/bids` 🔒 | `{ valor }` | `201 { lance, leilao }` |
+| POST | `/auctions/:id/bids` 🔒 | `{ valor, idempotencyKey? }` | `201 { lance, leilao }`, ou `200 { lance, leilao, repetido: true }` em reenvio |
+| POST | `/auctions/:id/cancelar` 🔒 | — | `200 { leilao }` (RF08) |
 
 `inicio` e `fim` são datas ISO 8601 em UTC (`2026-11-14T21:00:00.000Z`). O front converte
 o `datetime-local` do formulário com `toISOString()`, porque o input não carrega fuso.
@@ -40,14 +41,21 @@ Objeto `leilao`:
 
 ```json
 {
-  "id": 1,
+  "id": "0f3a2b1c-1111-4111-8111-aaaaaaaaaaaa",
   "titulo": "Bicicleta aro 29",
   "descricao": "Quadro de alumínio",
+  "categoria": "Esportes",
+  "fotos": [
+    "https://exemplo/foto-1.jpg",
+    "https://exemplo/foto-2.jpg",
+    "https://exemplo/foto-3.jpg"
+  ],
   "precoInicial": 100,
-  "donoId": 1,
-  "donoNome": "Marina",
+  "donoId": "7d1c...",
+  "donoNome": "Marina S.",
   "status": "ACTIVE",
   "statusRotulo": "em andamento",
+  "totalLances": 3,
   "maiorLance": { "usuarioId": 2, "usuarioNome": "Ana", "valor": 120, "criadoEm": "..." },
   "lanceAtual": 120,
   "incrementoAtual": 5,
@@ -117,6 +125,7 @@ Cliente servido em `/socket.io/socket.io.js`. Uma sala por leilão: `leilao:<id>
 
 ## Códigos de erro
 
-`400` dados inválidos · `401` sem sessão ou expirada · `403` regra de negócio ·
+`400` dados inválidos · `401` sem sessão ou expirada · `403` regra de negócio (dono) ·
+`429` lance rápido demais (RF13) ·
 `404` não encontrado · `409` conflito de estado · `413` corpo grande ·
 `500` erro interno (nunca detalhado ao cliente).
