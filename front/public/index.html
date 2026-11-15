@@ -157,6 +157,15 @@
     </section>
   </main>
 
+  <!-- Visor de foto ampliada (abre ao clicar em qualquer foto da galeria) -->
+  <div id="visor" class="visor" hidden role="dialog" aria-modal="true" aria-label="Foto ampliada">
+    <button id="visor-fechar" class="visor-fechar" type="button" aria-label="Fechar (Esc)">×</button>
+    <button id="visor-anterior" class="visor-nav esquerda" type="button" aria-label="Foto anterior">‹</button>
+    <img id="visor-img" alt="Foto ampliada">
+    <button id="visor-proxima" class="visor-nav direita" type="button" aria-label="Próxima foto">›</button>
+    <span id="visor-contador" class="visor-contador"></span>
+  </div>
+
   <footer class="rodape">Hackathon - Lu Cachorros</footer>
 
   <!-- cliente do Socket.IO servido pelo próprio back-end; precisa vir antes do main.js -->

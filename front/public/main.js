@@ -416,16 +416,86 @@ async function carregarDetalhe(id) {
 function desenharGaleria(fotos = []) {
   const galeria = $('det-galeria');
   galeria.textContent = '';
-  for (const url of fotos) {
+
+  fotos.forEach((url, indice) => {
+    const botao = document.createElement('button');
+    botao.type = 'button';
+    botao.className = 'miniatura';
+    botao.title = 'Ampliar foto';
+    botao.setAttribute('aria-label', `Ampliar foto ${indice + 1} de ${fotos.length}`);
+
     const img = document.createElement('img');
-    // O servidor já validou que é http(s) de imagem; aqui só exibimos
+    // O servidor já validou o endereço da imagem; aqui só exibimos
     img.src = url;
-    img.alt = 'Foto do item';
+    img.alt = `Foto ${indice + 1} do item`;
     img.loading = 'lazy';
-    galeria.append(img);
-  }
+
+    botao.append(img);
+    botao.addEventListener('click', () => abrirVisor(fotos, indice));
+    galeria.append(botao);
+  });
+
   galeria.hidden = fotos.length === 0;
 }
+
+// ---------------------------------------------------------------- ampliar foto
+let fotosDoVisor = [];
+let indiceDoVisor = 0;
+
+function atualizarVisor() {
+  const imagem = $('visor-img');
+  imagem.src = fotosDoVisor[indiceDoVisor];
+  imagem.alt = `Foto ${indiceDoVisor + 1} de ${fotosDoVisor.length}`;
+
+  const varias = fotosDoVisor.length > 1;
+  $('visor-anterior').hidden = !varias;
+  $('visor-proxima').hidden = !varias;
+  $('visor-contador').textContent = varias
+    ? `${indiceDoVisor + 1} / ${fotosDoVisor.length}`
+    : '';
+}
+
+let focoAnterior = null;
+
+function abrirVisor(fotos, indice) {
+  fotosDoVisor = fotos;
+  indiceDoVisor = indice;
+  focoAnterior = document.activeElement; // devolve o foco ao fechar
+  atualizarVisor();
+  $('visor').hidden = false;
+  document.body.classList.add('sem-rolagem');
+  $('visor-fechar').focus();
+}
+
+function fecharVisor() {
+  $('visor').hidden = true;
+  document.body.classList.remove('sem-rolagem');
+  if (focoAnterior && typeof focoAnterior.focus === 'function') focoAnterior.focus();
+  focoAnterior = null;
+}
+
+function navegarVisor(passo) {
+  if (fotosDoVisor.length === 0) return;
+  indiceDoVisor = (indiceDoVisor + passo + fotosDoVisor.length) % fotosDoVisor.length;
+  atualizarVisor();
+}
+
+$('visor-fechar').addEventListener('click', fecharVisor);
+$('visor-anterior').addEventListener('click', () => navegarVisor(-1));
+$('visor-proxima').addEventListener('click', () => navegarVisor(1));
+
+// Clicar no fundo escuro (fora da imagem) também fecha
+$('visor').addEventListener('click', (evento) => {
+  if (evento.target === $('visor')) fecharVisor();
+});
+
+// Esc fecha; setas trocam de foto
+document.addEventListener('keydown', (evento) => {
+  if ($('visor').hidden) return;
+  if (evento.key === 'Escape') fecharVisor();
+  if (evento.key === 'ArrowLeft') navegarVisor(-1);
+  if (evento.key === 'ArrowRight') navegarVisor(1);
+});
 
 function desenharHistorico(historico) {
   const lista = $('lista-lances');
