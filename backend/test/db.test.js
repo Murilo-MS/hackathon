@@ -406,3 +406,38 @@ test('prorrogação manual pelo comitente (RF15)', async () => {
     /limite de prorrogação/
   );
 });
+test('leilões do usuário: comitente, participações e situação (RF27)', async () => {
+  prepararBanco();
+  const dona = await userStore.criar({ nome: 'Dona', email: 'd@exemplo.com', senhaHash: 'h' });
+  const ana = await userStore.criar({ nome: 'Ana Souza', email: 'a@exemplo.com', senhaHash: 'h' });
+  const bruno = await userStore.criar({ nome: 'Bruno Lima', email: 'b@exemplo.com', senhaHash: 'h' });
+
+  const leilao = await criarLeilao(dona);
+  await store.atualizarEstados();
+  await store.darLance({ leilaoId: leilao.id, usuario: ana, valor: 100 });
+  await store.darLance({ leilaoId: leilao.id, usuario: bruno, valor: 105 });
+
+  const daDona = await store.meusLeiloes(dona);
+  assert.strictEqual(daDona.comitente.length, 1);
+  assert.strictEqual(daDona.participacoes.length, 0);
+
+  const daAna = await store.meusLeiloes(ana);
+  assert.strictEqual(daAna.comitente.length, 0);
+  assert.strictEqual(daAna.participacoes.length, 1);
+  assert.strictEqual(daAna.participacoes[0].situacao, 'COBERTO');
+  assert.strictEqual(daAna.participacoes[0].meuLance, 100);
+
+  const doBruno = await store.meusLeiloes(bruno);
+  assert.strictEqual(doBruno.participacoes[0].situacao, 'NA_FRENTE');
+
+  // terminou: quem liderava vence, quem foi coberto perde
+  await db.consultar('UPDATE auctions SET ends_at = $1 WHERE id = $2', [
+    new Date(Date.now() - 1000),
+    leilao.id,
+  ]);
+  await store.atualizarEstados();
+
+  assert.strictEqual((await store.meusLeiloes(bruno)).participacoes[0].situacao, 'VENCEU');
+  assert.strictEqual((await store.meusLeiloes(ana)).participacoes[0].situacao, 'PERDEU');
+  assert.strictEqual((await store.meusLeiloes(dona)).comitente[0].status, 'SOLD');
+});

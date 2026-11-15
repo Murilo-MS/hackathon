@@ -29,6 +29,12 @@ router.post('/', exigirLogin, async (req, res) => {
   res.status(201).json({ leilao });
 });
 
+// Leilões do usuário logado: "Seus leilões" e "Seus lances".
+// Fica antes de /:id para não ser confundido com um id.
+router.get('/meus', exigirLogin, async (req, res) => {
+  res.json(await store.meusLeiloes(req.usuario));
+});
+
 router.get('/:id', async (req, res) => {
   const leilao = await store.buscar(req.params.id);
   res.json({ leilao, historico: await store.historico(leilao.id) });

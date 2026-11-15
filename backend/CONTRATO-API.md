@@ -17,7 +17,7 @@ Rotas marcadas com 🔒 exigem `Authorization: Bearer <token>`.
 
 | Método | Rota | Corpo | Resposta |
 |---|---|---|---|
-| GET | `/auctions` | — | `200 { leiloes: [...], agora }` |
+| GET | `/auctions` | — | `200 { leiloes: [...], agora }` |`n| GET | `/auctions/meus` 🔒 | — | `200 { comitente: [...], participacoes: [...] }` |
 | POST | `/auctions` 🔒 | `{ titulo, descricao, categoria, fotos, precoInicial, inicio, fim }` | `201 { leilao }` |
 | GET | `/auctions/:id` | — | `200 { leilao, historico }` |
 | GET | `/auctions/:id/bids` | — | `200 { historico }` |
@@ -40,8 +40,14 @@ Reiniciar o servidor não apaga nada; o estado das janelas de tempo é recalcula
 **`endsAt` pode mudar durante o leilão** (RF15): um lance nos 2 minutos finais prorroga o término
 em até 30 minutos acumulados. O novo valor chega no evento `new_bid` (`endsAt`).
 
-Objeto `leilao`:
+Na rota `/auctions/meus`, cada item de `participacoes` traz ainda:
 
+- `situacao`: `NA_FRENTE` (você lidera), `COBERTO` (alguém cobriu), `VENCEU`, `PERDEU` ou `ENCERRADO`;
+- `meuLance`: o maior valor que você já deu naquele leilão.
+
+`comitente` são os leilões publicados por você, em qualquer estado.
+
+Objeto `leilao`:
 ```json
 {
   "id": "0f3a2b1c-1111-4111-8111-aaaaaaaaaaaa",

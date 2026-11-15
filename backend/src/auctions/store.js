@@ -470,4 +470,70 @@ async function prorrogar({ leilaoId, usuario, minutos }) {
   return buscar(leilaoId);
 }
 
-module.exports = { listar, buscar, criar, historico, darLance, cancelar, prorrogar, atualizarEstados, paraApi };
+// Situação de quem participou: usada na aba "Seus lances"
+function situacaoDoParticipante(leilao, usuarioId) {
+  const liderId = leilao.maiorLance?.usuarioId ?? null;
+
+  if (leilao.status === 'SOLD') {
+    return leilao.vencedor?.usuarioId === usuarioId ? 'VENCEU' : 'PERDEU';
+  }
+  if (leilao.status === 'ACTIVE' || leilao.status === 'SCHEDULED') {
+    return liderId === usuarioId ? 'NA_FRENTE' : 'COBERTO';
+  }
+  return 'ENCERRADO';
+}
+
+// Leilões do usuário: os que ele publicou e os que ele disputou.
+async function meusLeiloes(usuario) {
+  const [comitente, participacoes, meusLances] = await Promise.all([
+    db.consultar(`${SELECT_LEILAO} WHERE i.seller_id = $1 ${ORDEM}`, [usuario.id]),
+    // JOIN com uma tabela derivada em vez de EXISTS correlacionado:
+    // o resultado é o mesmo e o SQL fica portável (e mais fácil de testar).
+    db.consultar(
+      `${SELECT_LEILAO}
+       JOIN (
+         SELECT DISTINCT auction_id FROM bids WHERE bidder_id = $1
+       ) meus ON meus.auction_id = a.id
+       ${ORDEM}`,
+      [usuario.id]
+    ),
+    db.consultar(
+      `SELECT auction_id, max(amount) AS meu_lance
+       FROM bids
+       WHERE bidder_id = $1
+       GROUP BY auction_id`,
+      [usuario.id]
+    ),
+  ]);
+
+  const fotos = await fotosDeVarios(
+    [...comitente.rows, ...participacoes.rows].map((linha) => linha.item_id)
+  );
+  const meusValores = new Map(meusLances.rows.map((linha) => [linha.auction_id, Number(linha.meu_lance)]));
+  const comFotos = (linha) => paraApi(linha, fotos.get(linha.item_id) || []);
+
+  return {
+    comitente: comitente.rows.map(comFotos),
+    participacoes: participacoes.rows.map((linha) => {
+      const leilao = comFotos(linha);
+      return {
+        ...leilao,
+        meuLance: meusValores.get(linha.id) ?? null,
+        situacao: situacaoDoParticipante(leilao, usuario.id),
+      };
+    }),
+  };
+}
+
+module.exports = {
+  listar,
+  buscar,
+  criar,
+  historico,
+  darLance,
+  cancelar,
+  prorrogar,
+  atualizarEstados,
+  meusLeiloes,
+  paraApi,
+};

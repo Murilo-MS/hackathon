@@ -172,12 +172,82 @@ function atualizarCronometros() {
 }
 
 // ---------------------------------------------------------------- lista
-async function carregarLista() {
+// ---------------------------------------------------------------- pastas
+const PASTAS = {
+  abertos: {
+    hash: '#/',
+    titulo: 'Leilões em aberto',
+    vazio: 'Nenhum leilão em aberto agora.',
+    status: ['ACTIVE', 'SCHEDULED'],
+  },
+  encerrados: {
+    hash: '#/encerrados',
+    titulo: 'Leilões encerrados',
+    vazio: 'Nenhum leilão encerrado ainda.',
+    status: ['SOLD', 'ENDED_NO_BIDS', 'CANCELED'],
+  },
+  lances: { hash: '#/lances', titulo: 'Seus lances', vazio: 'Você ainda não deu lances.' },
+  meus: { hash: '#/meus', titulo: 'Seus leilões', vazio: 'Você ainda não publicou leilões.' },
+};
+
+const ROTULO_SITUACAO = {
+  NA_FRENTE: 'você está na frente',
+  COBERTO: 'você foi coberto',
+  VENCEU: 'você venceu',
+  PERDEU: 'você perdeu',
+  ENCERRADO: 'encerrado',
+};
+
+let pastaAtiva = 'abertos';
+
+function marcarPasta(nome) {
+  pastaAtiva = nome;
+  for (const chave of Object.keys(PASTAS)) {
+    const link = $(`pasta-${chave}`);
+    if (link) link.classList.toggle('ativa', chave === nome);
+  }
+  $('lista-titulo').textContent = PASTAS[nome].titulo;
+}
+
+function textoResultado(leilao) {
+  if (leilao.status === 'SOLD') {
+    return `Vendido para ${leilao.vencedor?.usuarioNome ?? '—'} por ${formatarDinheiro(leilao.vencedor?.valor)}.`;
+  }
+  if (leilao.status === 'ENDED_NO_BIDS') return 'Encerrado sem lances.';
+  if (leilao.status === 'CANCELED') return 'Cancelado pelo comitente.';
+  return '';
+}
+
+async function carregarPasta(nome) {
+  const pasta = PASTAS[nome] || PASTAS.abertos;
+  marcarPasta(nome);
+
+  // "Seus lances" e "Seus leilões" só fazem sentido com sessão
+  const precisaLogin = nome === 'lances' || nome === 'meus';
+  if (precisaLogin && !usuario) {
+    desenharLista([], { vazio: 'Entre na sua conta para ver esta pasta.' });
+    return;
+  }
+
   try {
+    if (precisaLogin) {
+      const dados = await api('/auctions/meus');
+      const lista = nome === 'lances' ? dados.participacoes : dados.comitente;
+      desenharLista(lista, { vazio: pasta.vazio, pasta: nome });
+      return;
+    }
+
     const { leiloes, agora } = await api('/auctions');
     deslocamento = new Date(agora).getTime() - Date.now();
-    desenharLista(leiloes);
+    desenharLista(
+      leiloes.filter((leilao) => pasta.status.includes(leilao.status)),
+      { vazio: pasta.vazio, pasta: nome }
+    );
   } catch (erro) {
+    if (erro.status === 401) {
+      desenharLista([], { vazio: 'Entre na sua conta para ver esta pasta.' });
+      return;
+    }
     mensagem(erro.message, 'erro');
   }
 }
@@ -195,10 +265,11 @@ function campoNumerico(rotulo, valor, classe, terminaEm) {
   return div;
 }
 
-function desenharLista(leiloes) {
+function desenharLista(leiloes, { vazio = 'Nenhum leilão.', pasta = 'abertos' } = {}) {
   const grade = $('lista-leiloes');
   grade.textContent = '';
   $('lista-vazia').hidden = leiloes.length > 0;
+  $('lista-vazia').textContent = vazio;
 
   for (const leilao of leiloes) {
     const cartao = document.createElement('article');
@@ -229,6 +300,21 @@ function desenharLista(leiloes) {
       campoNumerico(rotuloDoContador(leilao), '—', 'medio', alvoDoContador(leilao))
     );
 
+    // Linha extra que muda conforme a pasta
+    const extra = document.createElement('p');
+    extra.className = 'resultado';
+    if (pasta === 'encerrados') {
+      extra.textContent = textoResultado(leilao);
+    } else if (pasta === 'lances') {
+      extra.textContent = `${ROTULO_SITUACAO[leilao.situacao] ?? ''} · seu último lance: ${formatarDinheiro(leilao.meuLance)}`;
+      extra.classList.toggle('perdido', leilao.situacao === 'PERDEU' || leilao.situacao === 'COBERTO');
+    } else if (pasta === 'meus') {
+      const resultado = textoResultado(leilao);
+      extra.textContent = `${leilao.totalLances} lance(s)${resultado ? ` · ${resultado}` : ''}`;
+    } else {
+      extra.hidden = true;
+    }
+
     const rodape = document.createElement('div');
     rodape.className = 'rodape-item';
 
@@ -242,12 +328,11 @@ function desenharLista(leiloes) {
     link.textContent = leilao.status === 'ACTIVE' ? 'Entrar na sala' : 'Abrir';
 
     rodape.append(etiqueta, link);
-    cartao.append(titulo, capa, descricao, numeros, rodape);
+    cartao.append(titulo, capa, descricao, numeros, extra, rodape);
     grade.append(cartao);
   }
   atualizarCronometros();
 }
-
 // ---------------------------------------------------------------- criar leilão
 function doisDigitos(n) {
   return String(n).padStart(2, '0');
@@ -690,6 +775,10 @@ async function rotear() {
   }
 
   // Os ids agora são UUID (vêm do PostgreSQL), não números
+  if (hash.startsWith('#/encerrados')) { await abrirLista('encerrados'); return; }
+  if (hash.startsWith('#/lances')) { await abrirLista('lances'); return; }
+  if (hash.startsWith('#/meus')) { await abrirLista('meus'); return; }
+
   const casaLeilao = hash.match(/^#\/leilao\/([0-9a-f-]{36})$/i);
   if (casaLeilao) {
     // RF04: a listagem é pública, mas entrar na sala exige login
@@ -703,11 +792,16 @@ async function rotear() {
     return;
   }
 
+  await abrirLista('abertos');
+}
+
+// Toda pasta limpa a sala aberta e redesenha a lista
+async function abrirLista(nomePasta) {
   if (leilaoAberto && socket) socket.emit('leave_auction', leilaoAberto);
   leilaoAberto = null;
   leilaoAbertoDados = null;
   mostrarView('lista');
-  await carregarLista();
+  await carregarPasta(nomePasta);
 }
 
 window.addEventListener('hashchange', rotear);
@@ -730,6 +824,6 @@ window.addEventListener('hashchange', rotear);
 
   setInterval(atualizarCronometros, 1000);
   setInterval(() => {
-    if (!$('view-lista').hidden) carregarLista();
+    if (!$('view-lista').hidden) carregarPasta(pastaAtiva);
   }, 8000);
 })();

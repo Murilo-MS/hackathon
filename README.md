@@ -80,6 +80,9 @@ PostgreSQL: users, items, item_photos, auctions, bids
 - **Lance atômico:** `BEGIN` → `SELECT ... FOR UPDATE` → valida → `INSERT` no lance →
   `UPDATE` do preço/líder → `COMMIT`. Depois do commit, a sala recebe `new_bid`.
 - **A tela nunca decide preço:** incremento, lance mínimo e vencedor são calculados no servidor.
+- **Quatro pastas na tela inicial:** *Em aberto* (agendados e em andamento), *Encerrados*
+  (vendidos, sem lances e cancelados, com o resultado e o vencedor), *Seus lances* (com a
+  situação: na frente, coberto, venceu, perdeu) e *Seus leilões* (todos os que você publicou).
 
 ## Decisões da equipe
 
