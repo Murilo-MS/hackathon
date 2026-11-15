@@ -25,7 +25,7 @@ vendido, encerrado sem lances e cancelado.
 ## Stack
 
 - **Back-end:** Node.js 20+ com Express 5, socket.io, JWT (`jsonwebtoken`) e bcrypt (`bcryptjs`)
-- **Banco:** PostgreSQL 16 (schema em `dados/leilao_db.sql`)
+- **Banco:** PostgreSQL 18 (schema em `dados/leilao_db.sql`)
 - **Front-end:** HTML, CSS e JavaScript puro (sem framework), servido pelo próprio back-end
 - **Infra:** Docker Compose (banco + aplicação) ou Node direto na VM
 
