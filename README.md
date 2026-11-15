@@ -79,7 +79,7 @@ Os scripts de `db:setup` e `db:dados` precisam ser executados de novo depois dis
 
 ```bash
 cd backend
-npm test                         # 17 testes (regras, autenticação e SQL com pg-mem)
+npm test                         # 26 testes (regras, autenticação, SQL e upload)
 npm run verificar                # 40+ verificações ponta a ponta contra a API rodando
 ```
 
