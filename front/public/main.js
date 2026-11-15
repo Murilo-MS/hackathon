@@ -261,14 +261,19 @@ function paraInputData(data) {
 // ---------------------------------------------------------------- fotos (upload)
 let arquivosDeFoto = [];
 
-$('leilao-fotos').addEventListener('change', () => {
-  arquivosDeFoto = [...$('leilao-fotos').files].slice(0, 6);
-  $('fotos-aviso').textContent =
-    arquivosDeFoto.length < 3
-      ? `Selecione pelo menos 3 fotos (você escolheu ${arquivosDeFoto.length}).`
-      : '';
-  desenharPreviaDeFotos();
-});
+/** @type {HTMLInputElement | null} */
+const campoDeFotos = document.getElementById('leilao-fotos');
+
+if (campoDeFotos) {
+  campoDeFotos.addEventListener('change', () => {
+    arquivosDeFoto = Array.from(campoDeFotos.files || []).slice(0, 6);
+    $('fotos-aviso').textContent =
+      arquivosDeFoto.length < 3
+        ? `Selecione pelo menos 3 fotos (você escolheu ${arquivosDeFoto.length}).`
+        : '';
+    desenharPreviaDeFotos();
+  });
+}
 
 function desenharPreviaDeFotos() {
   const previa = $('fotos-previa');
