@@ -2,6 +2,7 @@ const path = require('path');
 const express = require('express');
 const authRoutes = require('./auth/routes/auth');
 const auctionsRoutes = require('./auctions/routes');
+const fotosRoutes = require('./fotos/routes');
 
 const app = express();
 app.disable('x-powered-by');
@@ -13,6 +14,10 @@ app.get('/health', (req, res) => {
 
 app.use('/auth', authRoutes);
 app.use('/auctions', auctionsRoutes);
+app.use('/fotos', fotosRoutes);
+
+// No modo local de armazenamento (sem S3), as fotos são servidas daqui
+app.use('/uploads', express.static(process.env.UPLOADS_DIR || path.join(__dirname, '..', 'uploads')));
 
 app.use(express.static(path.join(__dirname, '..', '..', 'front', 'public')));
 

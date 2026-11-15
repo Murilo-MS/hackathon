@@ -258,58 +258,46 @@ function paraInputData(data) {
   return `${data.getFullYear()}-${doisDigitos(data.getMonth() + 1)}-${doisDigitos(data.getDate())}T${doisDigitos(data.getHours())}:${doisDigitos(data.getMinutes())}`;
 }
 
-// ---------------------------------------------------------------- fotos (RF05)
-const FOTOS_PADRAO = [
-  'https://picsum.photos/seed/leilao-1/800/600',
-  'https://picsum.photos/seed/leilao-2/800/600',
-  'https://picsum.photos/seed/leilao-3/800/600',
-];
+// ---------------------------------------------------------------- fotos (upload)
+let arquivosDeFoto = [];
 
-function adicionarCampoDeFoto(valor = '') {
-  const campos = $('fotos-campos');
-  if (campos.children.length >= 6) {
-    $('fotos-aviso').textContent = 'Máximo de 6 fotos.';
-    return;
+$('leilao-fotos').addEventListener('change', () => {
+  arquivosDeFoto = [...$('leilao-fotos').files].slice(0, 6);
+  $('fotos-aviso').textContent =
+    arquivosDeFoto.length < 3
+      ? `Selecione pelo menos 3 fotos (você escolheu ${arquivosDeFoto.length}).`
+      : '';
+  desenharPreviaDeFotos();
+});
+
+function desenharPreviaDeFotos() {
+  const previa = $('fotos-previa');
+  previa.textContent = '';
+  for (const arquivo of arquivosDeFoto) {
+    const img = document.createElement('img');
+    const url = URL.createObjectURL(arquivo);
+    img.src = url;
+    img.alt = arquivo.name;
+    img.onload = () => URL.revokeObjectURL(url);
+    previa.append(img);
   }
+}
 
-  const linha = document.createElement('div');
-  linha.className = 'linha-foto';
+// Envia os arquivos e devolve as URLs que ficam gravadas no banco
+async function enviarFotos(arquivos) {
+  const dados = new FormData();
+  for (const arquivo of arquivos) dados.append('fotos', arquivo);
 
-  const input = document.createElement('input');
-  input.type = 'url';
-  input.placeholder = 'https://exemplo.com/foto.jpg';
-  input.value = valor;
-  input.required = true;
-
-  const remover = document.createElement('button');
-  remover.type = 'button';
-  remover.className = 'botao secundario';
-  remover.textContent = 'Remover';
-  remover.addEventListener('click', () => {
-    if ($('fotos-campos').children.length <= 3) {
-      $('fotos-aviso').textContent = 'São necessárias pelo menos 3 fotos.';
-      return;
-    }
-    linha.remove();
-    $('fotos-aviso').textContent = '';
+  const token = localStorage.getItem(TOKEN_KEY);
+  const resposta = await fetch('/fotos', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: dados,
   });
-
-  linha.append(input, remover);
-  campos.append(linha);
+  const corpo = await resposta.json().catch(() => ({}));
+  if (!resposta.ok) throw new Error(corpo.erro || 'Falha ao enviar as fotos');
+  return corpo.urls;
 }
-
-function desenharCamposDeFotos() {
-  const campos = $('fotos-campos');
-  if (campos.children.length > 0) return;
-  for (const url of FOTOS_PADRAO) adicionarCampoDeFoto(url);
-}
-
-function lerFotos() {
-  return [...$('fotos-campos').querySelectorAll('input')]
-    .map((input) => input.value.trim())
-    .filter(Boolean);
-}
-
 function preencherDatasPadrao() {
   if (!$('leilao-inicio').value) {
     $('leilao-inicio').value = paraInputData(new Date(Date.now() + 60 * 1000));
@@ -317,7 +305,7 @@ function preencherDatasPadrao() {
   if (!$('leilao-fim').value) {
     $('leilao-fim').value = paraInputData(new Date(Date.now() + 4 * 60 * 1000));
   }
-  desenharCamposDeFotos();
+
 }
 
 $('btn-novo').addEventListener('click', () => {
@@ -329,7 +317,7 @@ $('btn-cancelar').addEventListener('click', () => {
   $('form-leilao').hidden = true;
 });
 
-$('btn-mais-foto').addEventListener('click', () => adicionarCampoDeFoto());
+
 
 $('form-leilao').addEventListener('submit', async (evento) => {
   evento.preventDefault();
@@ -347,7 +335,7 @@ $('form-leilao').addEventListener('submit', async (evento) => {
         titulo: $('leilao-titulo').value,
         descricao: $('leilao-descricao').value,
         categoria: $('leilao-categoria').value,
-        fotos: lerFotos(),
+        fotos: await enviarFotos(arquivosDeFoto),
 
         precoInicial: Number($('leilao-preco').value),
         // toISOString converte a hora local do navegador para UTC,

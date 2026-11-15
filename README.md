@@ -89,10 +89,13 @@ PostgreSQL: users, items, item_photos, auctions, bids
    sempre o mesmo mínimo.
 2. **Limites de tempo (RF06).** Duração de 10 segundos a 24 horas e início até 7 dias à frente.
    O mínimo curto existe para a demonstração: dá para mostrar abertura e fechamento em segundos.
-3. **Fotos (RF07).** Guardamos **apenas a URL** em `item_photos` — nunca o arquivo no banco nem
-   no disco da VM. A validação aceita só `http(s)` de imagem (jpg/png/webp/gif) ou hosts de
-   serviços de imagem, entre 3 e 6 fotos. A organização fornece o bucket; trocar a origem é
-   mudar o endereço que o front envia.
+3. **Fotos (RF05/RF07).** O comitente escolhe **arquivos do computador**; o front envia para
+   `POST /fotos` (multipart/form-data) e só depois cria o leilão. O servidor valida quantidade
+   (3 a 6), tipo (JPG, PNG ou WEBP), tamanho (até 5 MB cada) e confere os primeiros bytes do
+   arquivo — extensão e Content-Type podem mentir, o conteúdo não. O banco guarda apenas a URL
+   em `item_photos`. Dois destinos: com `S3_*` configurado o arquivo vai para o bucket da
+   organização (caminho do edital); sem S3 ele fica em `UPLOADS_DIR` e é servido em `/uploads`,
+   um modo de emergência para a demo enquanto o bucket não existe.
 4. **Identificação sem nome completo (RF09).** Na sala, as pessoas aparecem como "Ana S.".
    O perfil público (Nível 2) é que mostraria o nome completo.
 5. **Frequência de lances (RF13).** No máximo um lance a cada 500 ms por usuário, checado por

@@ -43,11 +43,23 @@ services:
       JWT_SECRET: ${JWT_SECRET:-segredo-de-teste-troque-no-arquivo-env}
       JWT_EXPIRES_IN: 1h
       DATABASE_URL: postgresql://hackathon_user:hackathon_password@db:5432/leilao_db
+      # Fotos: com S3_* configurado, vão para o bucket. Sem S3, ficam nesta pasta.
+      UPLOADS_DIR: /app/uploads
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PUBLIC_URL: ${S3_PUBLIC_URL:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     ports:
       - "8080:8080"
+    volumes:
+      # Mantém as fotos entre rebuilds; no modo S3 isso não é usado
+      - uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   postgres_data:
+  uploads:

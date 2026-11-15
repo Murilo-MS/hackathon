@@ -98,3 +98,14 @@ test('prorrogação (RF15): 2 minutos de janela, teto de 30 minutos', () => {
     null
   );
 });
+test('validarFotos aceita URL absoluta e o caminho local do upload', () => {
+  const aceitas = regras.validarFotos([
+    'https://picsum.photos/seed/a/800/600',
+    '/uploads/1712345678-abcdef.jpg',
+    '/uploads/1712345678-abcdef.webp',
+  ]);
+  assert.strictEqual(aceitas.length, 3);
+
+  assert.throws(() => regras.validarFotos(['/uploads/arquivo.exe', '/uploads/a.jpg', '/uploads/b.png']), /inválida/i);
+  assert.throws(() => regras.validarFotos(['/etc/passwd', '/uploads/a.jpg', '/uploads/b.png']), /inválida/i);
+});

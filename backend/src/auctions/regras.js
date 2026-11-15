@@ -183,6 +183,14 @@ function validarFotos(fotos) {
     if (url.length > LIMITES.fotoUrlMax) {
       throw erro(400, 'Endereço de foto muito longo', 'FOTO_LONGA');
     }
+    // Foto enviada pelo nosso /fotos no modo local: /uploads/arquivo.jpg
+    if (url.startsWith('/uploads/')) {
+      if (!/^\/uploads\/[A-Za-z0-9._-]+\.(jpg|jpeg|png|webp)$/i.test(url)) {
+        throw erro(400, `Foto inválida: ${url}`, 'FOTO_INVALIDA');
+      }
+      continue;
+    }
+
     let endereco;
     try {
       endereco = new URL(url);
